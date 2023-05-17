@@ -18,7 +18,7 @@ use cw_utils::{Expiration, ThresholdResponse};
 use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{next_id, Config, BALLOTS, CONFIG, PROPOSALS, VOTERS, ADMINS, OPS, next_tranche_id, TRANCHES};
+use crate::state::{next_id, BALLOTS, CONFIG, PROPOSALS, VOTERS, ADMINS, OPS, next_tranche_id, TRANCHES};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:cw3-fixed-multisig";
@@ -52,7 +52,7 @@ pub fn instantiate(
     }
     for tranche in msg.tranches.iter() {
         let tranche_id = next_tranche_id(deps.storage)?;
-        TRANCHES.save(deps.storage, tranche_id, &tranche)?;
+        TRANCHES.save(deps.storage, tranche_id, tranche)?;
     }
     Ok(Response::default())
 }
@@ -423,7 +423,6 @@ mod tests {
     use cw_utils::{Duration, Threshold};
 
     use crate::data_structure::{Tranche};
-    use crate::msg::Voter;
 
     use super::*;
 
@@ -454,13 +453,6 @@ mod tests {
     const REWARD_ADDR1: &str = "reward0001";
     const REWARD_ADDR2: &str = "reward0002";
 
-    fn voter<T: Into<String>>(addr: T, weight: u64) -> Voter {
-        Voter {
-            addr: addr.into(),
-            weight,
-        }
-    }
-
     // this will set up the instantiation for other tests
     #[track_caller]
     fn setup_test_case(
@@ -469,12 +461,12 @@ mod tests {
     ) -> Result<Response<Empty>, ContractError> {
         let env = mock_env();
         let mut vesting_schedule1 = vec![(env.block.time.seconds() + 31536000, 12000000u64)];
-        for installment in 1..36 {
+        for installment in 1..37 {
             vesting_schedule1.push((installment * 2592000 + vesting_schedule1[0].0, 1000000u64));
         }
         let vesting_schedule1: [(u64, u64); 37] = vesting_schedule1.try_into().unwrap();
         let mut vesting_schedule2 = vec![(env.block.time.seconds(), 12000000u64)];
-        for installment in 1..12 {
+        for installment in 1..13 {
             vesting_schedule2.push((installment * 2592000 + vesting_schedule2[0].0, 1000000u64));
         }
         let vesting_schedule2: [(u64, u64); 13] = vesting_schedule2.try_into().unwrap();
@@ -530,7 +522,7 @@ mod tests {
         let mut deps = mock_dependencies();
         let info = mock_info(OWNER, &[]);
 
-        let max_voting_period = Duration::Time(1234567);
+        let _max_voting_period = Duration::Time(1234567);
 
         // No admins fails
         let instantiate_msg = InstantiateMsg {
@@ -551,7 +543,7 @@ mod tests {
             deps.as_mut(),
             mock_env(),
             info.clone(),
-            instantiate_msg.clone(),
+            instantiate_msg,
         )
         .unwrap_err();
         assert_eq!(err, ContractError::NoAdmins {});
@@ -603,7 +595,7 @@ mod tests {
         );
 
         // All valid
-        let threshold = Threshold::AbsoluteCount { weight: 1 };
+        let _threshold = Threshold::AbsoluteCount { weight: 1 };
         setup_test_case(deps.as_mut(), info).unwrap();
 
         // Verify
@@ -622,8 +614,8 @@ mod tests {
     fn zero_weight_member_cant_vote() {
         let mut deps = mock_dependencies();
 
-        let threshold = Threshold::AbsoluteCount { weight: 4 };
-        let voting_period = Duration::Time(2000000);
+        let _threshold = Threshold::AbsoluteCount { weight: 4 };
+        let _voting_period = Duration::Time(2000000);
 
         let info = mock_info(OWNER, &[]);
         setup_test_case(deps.as_mut(), info).unwrap();
@@ -662,8 +654,8 @@ mod tests {
     fn test_propose_works() {
         let mut deps = mock_dependencies();
 
-        let threshold = Threshold::AbsoluteCount { weight: 4 };
-        let voting_period = Duration::Time(2000000);
+        let _threshold = Threshold::AbsoluteCount { weight: 4 };
+        let _voting_period = Duration::Time(2000000);
 
         let info = mock_info(OWNER, &[]);
         setup_test_case(deps.as_mut(), info).unwrap();
@@ -729,7 +721,7 @@ mod tests {
     fn test_vote_works() {
         let mut deps = mock_dependencies();
 
-        let threshold = Threshold::AbsoluteCount { weight: 3 };
+        let _threshold = Threshold::AbsoluteCount { weight: 3 };
         let voting_period = Duration::Time(2000000);
 
         let info = mock_info(OWNER, &[]);
@@ -953,8 +945,8 @@ mod tests {
     fn test_execute_works() {
         let mut deps = mock_dependencies();
 
-        let threshold = Threshold::AbsoluteCount { weight: 3 };
-        let voting_period = Duration::Time(2000000);
+        let _threshold = Threshold::AbsoluteCount { weight: 3 };
+        let _voting_period = Duration::Time(2000000);
 
         let info = mock_info(OWNER, &[]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
@@ -1028,7 +1020,7 @@ mod tests {
     fn proposal_pass_on_expiration() {
         let mut deps = mock_dependencies();
 
-        let threshold = Threshold::ThresholdQuorum {
+        let _threshold = Threshold::ThresholdQuorum {
             threshold: Decimal::percent(51),
             quorum: Decimal::percent(1),
         };
@@ -1121,8 +1113,8 @@ mod tests {
     fn test_close_works() {
         let mut deps = mock_dependencies();
 
-        let threshold = Threshold::AbsoluteCount { weight: 3 };
-        let voting_period = Duration::Height(2000000);
+        let _threshold = Threshold::AbsoluteCount { weight: 3 };
+        let _voting_period = Duration::Height(2000000);
 
         let info = mock_info(OWNER, &[]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();

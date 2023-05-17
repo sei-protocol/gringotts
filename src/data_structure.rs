@@ -23,10 +23,10 @@ impl Tranche {
         }
         let mut total_vested: u64 = 0;
         for (vesting_time, vested) in self.vesting_schedule.iter() {
-            if vesting_time.clone() < env.block.time.seconds() {
+            if *vesting_time < env.block.time.seconds() {
                 return false
             }
-            total_vested += vested.clone();
+            total_vested += *vested;
         }
         self.amount == total_vested
     }
