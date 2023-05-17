@@ -43,4 +43,13 @@ pub enum ContractError {
 
     #[error("Cannot close completed or passed proposals")]
     WrongCloseStatus {},
+
+    #[error("No admins")]
+    NoAdmins {},
+
+    #[error("No operators")]
+    NoOps {},
+
+    #[error("Invalid tranche")]
+    InvalidTranche {},
 }

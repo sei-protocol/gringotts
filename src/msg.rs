@@ -1,13 +1,15 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{CosmosMsg, Empty};
+use cosmwasm_std::{CosmosMsg, Empty, Addr};
 use cw3::Vote;
-use cw_utils::{Duration, Expiration, Threshold};
+use cw_utils::{Expiration};
+
+use crate::data_structure::Tranche;
 
 #[cw_serde]
 pub struct InstantiateMsg {
-    pub voters: Vec<Voter>,
-    pub threshold: Threshold,
-    pub max_voting_period: Duration,
+    pub admins: Vec<Addr>,
+    pub ops: Vec<Addr>,
+    pub tranches: Vec<Tranche>,
 }
 
 #[cw_serde]

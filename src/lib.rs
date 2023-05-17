@@ -1,4 +1,5 @@
 pub mod contract;
+pub mod data_structure;
 mod error;
 pub mod msg;
 pub mod state;

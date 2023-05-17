@@ -15,9 +15,10 @@ use cw3::{
 use cw_storage_plus::Bound;
 use cw_utils::{Expiration, ThresholdResponse};
 
+use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{next_id, Config, BALLOTS, CONFIG, PROPOSALS, VOTERS};
+use crate::state::{next_id, Config, BALLOTS, CONFIG, PROPOSALS, VOTERS, ADMINS, OPS, next_tranche_id, TRANCHES};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:cw3-fixed-multisig";
@@ -26,30 +27,32 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     _info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
-    if msg.voters.is_empty() {
-        return Err(ContractError::NoVoters {});
+    if msg.admins.is_empty() {
+        return Err(ContractError::NoAdmins {});
     }
-    let total_weight = msg.voters.iter().map(|v| v.weight).sum();
-
-    msg.threshold.validate(total_weight)?;
+    if msg.ops.is_empty() {
+        return Err(ContractError::NoOps {});
+    }
+    for tranche in msg.tranches.iter() {
+        if !tranche.validate(&env) {
+            return Err(ContractError::InvalidTranche {});
+        }
+    }
 
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
-
-    let cfg = Config {
-        threshold: msg.threshold,
-        total_weight,
-        max_voting_period: msg.max_voting_period,
-    };
-    CONFIG.save(deps.storage, &cfg)?;
-
-    // add all voters
-    for voter in msg.voters.iter() {
-        let key = deps.api.addr_validate(&voter.addr)?;
-        VOTERS.save(deps.storage, &key, &voter.weight)?;
+    for admin in msg.admins.iter() {
+        ADMINS.save(deps.storage, admin, &EmptyStruct{})?;
+    }
+    for op in msg.ops.iter() {
+        OPS.save(deps.storage, op, &EmptyStruct{})?;
+    }
+    for tranche in msg.tranches.iter() {
+        let tranche_id = next_tranche_id(deps.storage)?;
+        TRANCHES.save(deps.storage, tranche_id, &tranche)?;
     }
     Ok(Response::default())
 }
@@ -411,12 +414,15 @@ fn list_voters(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{coin, from_binary, BankMsg, Decimal};
+    use cosmwasm_std::{coin, from_binary, BankMsg, Decimal, Addr};
 
     use cw2::{get_contract_version, ContractVersion};
     use cw_utils::{Duration, Threshold};
 
+    use crate::data_structure::{Tranche};
     use crate::msg::Voter;
 
     use super::*;
@@ -443,6 +449,11 @@ mod tests {
     const NOWEIGHT_VOTER: &str = "voterxxxx";
     const SOMEBODY: &str = "somebody";
 
+    const UNLOCK_ADDR1: &str = "unlock0001";
+    const UNLOCK_ADDR2: &str = "unlock0002";
+    const REWARD_ADDR1: &str = "reward0001";
+    const REWARD_ADDR2: &str = "reward0002";
+
     fn voter<T: Into<String>>(addr: T, weight: u64) -> Voter {
         Voter {
             addr: addr.into(),
@@ -455,25 +466,43 @@ mod tests {
     fn setup_test_case(
         deps: DepsMut,
         info: MessageInfo,
-        threshold: Threshold,
-        max_voting_period: Duration,
     ) -> Result<Response<Empty>, ContractError> {
-        // Instantiate a contract with voters
-        let voters = vec![
-            voter(&info.sender, 1),
-            voter(VOTER1, 1),
-            voter(VOTER2, 2),
-            voter(VOTER3, 3),
-            voter(VOTER4, 4),
-            voter(VOTER5, 5),
-            voter(VOTER6, 1),
-            voter(NOWEIGHT_VOTER, 0),
-        ];
-
+        let env = mock_env();
+        let mut vesting_schedule1 = vec![(env.block.time.seconds() + 31536000, 12000000u64)];
+        for installment in 1..36 {
+            vesting_schedule1.push((installment * 2592000 + vesting_schedule1[0].0, 1000000u64));
+        }
+        let vesting_schedule1: [(u64, u64); 37] = vesting_schedule1.try_into().unwrap();
+        let mut vesting_schedule2 = vec![(env.block.time.seconds(), 12000000u64)];
+        for installment in 1..12 {
+            vesting_schedule2.push((installment * 2592000 + vesting_schedule2[0].0, 1000000u64));
+        }
+        let vesting_schedule2: [(u64, u64); 13] = vesting_schedule2.try_into().unwrap();
         let instantiate_msg = InstantiateMsg {
-            voters,
-            threshold,
-            max_voting_period,
+            admins: vec![
+                Addr::unchecked(VOTER1),
+                Addr::unchecked(VOTER2),
+                Addr::unchecked(VOTER3),
+                Addr::unchecked(VOTER4),
+            ],
+            ops: vec![
+                Addr::unchecked(VOTER5),
+                Addr::unchecked(VOTER6),
+            ],
+            tranches: vec![
+                Tranche {
+                    amount: 48000000,
+                    unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
+                    staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
+                    vesting_schedule: HashMap::from(vesting_schedule1),
+                },
+                Tranche {
+                    amount: 24000000,
+                    unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR2),
+                    staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR2),
+                    vesting_schedule: HashMap::from(vesting_schedule2),
+                }
+            ],
         };
         instantiate(deps, mock_env(), info, instantiate_msg)
     }
@@ -503,14 +532,20 @@ mod tests {
 
         let max_voting_period = Duration::Time(1234567);
 
-        // No voters fails
+        // No admins fails
         let instantiate_msg = InstantiateMsg {
-            voters: vec![],
-            threshold: Threshold::ThresholdQuorum {
-                threshold: Decimal::zero(),
-                quorum: Decimal::percent(1),
-            },
-            max_voting_period,
+            admins: vec![],
+            ops: vec![
+                Addr::unchecked(VOTER5),
+            ],
+            tranches: vec![
+                Tranche {
+                    amount: 0,
+                    unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
+                    staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
+                    vesting_schedule: HashMap::new(),
+                },
+            ],
         };
         let err = instantiate(
             deps.as_mut(),
@@ -519,32 +554,57 @@ mod tests {
             instantiate_msg.clone(),
         )
         .unwrap_err();
-        assert_eq!(err, ContractError::NoVoters {});
+        assert_eq!(err, ContractError::NoAdmins {});
 
-        // Zero required weight fails
+        // Zero ops fails
         let instantiate_msg = InstantiateMsg {
-            voters: vec![voter(OWNER, 1)],
-            ..instantiate_msg
+            admins: vec![
+                Addr::unchecked(VOTER1),
+            ],
+            ops: vec![],
+            tranches: vec![
+                Tranche {
+                    amount: 0,
+                    unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
+                    staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
+                    vesting_schedule: HashMap::new(),
+                },
+            ],
         };
         let err =
             instantiate(deps.as_mut(), mock_env(), info.clone(), instantiate_msg).unwrap_err();
         assert_eq!(
             err,
-            ContractError::Threshold(cw_utils::ThresholdError::InvalidThreshold {})
+            ContractError::NoOps {},
         );
 
-        // Total weight less than required weight not allowed
-        let threshold = Threshold::AbsoluteCount { weight: 100 };
+        // Invalid vesting schedule
+        let instantiate_msg = InstantiateMsg {
+            admins: vec![
+                Addr::unchecked(VOTER1),
+            ],
+            ops: vec![
+                Addr::unchecked(VOTER5),
+            ],
+            tranches: vec![
+                Tranche {
+                    amount: 10,
+                    unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
+                    staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
+                    vesting_schedule: HashMap::from([(mock_env().block.time.seconds(), 12u64)]),
+                },
+            ],
+        };
         let err =
-            setup_test_case(deps.as_mut(), info.clone(), threshold, max_voting_period).unwrap_err();
+            instantiate(deps.as_mut(), mock_env(), info.clone(), instantiate_msg).unwrap_err();
         assert_eq!(
             err,
-            ContractError::Threshold(cw_utils::ThresholdError::UnreachableWeight {})
+            ContractError::InvalidTranche {},
         );
 
         // All valid
         let threshold = Threshold::AbsoluteCount { weight: 1 };
-        setup_test_case(deps.as_mut(), info, threshold, max_voting_period).unwrap();
+        setup_test_case(deps.as_mut(), info).unwrap();
 
         // Verify
         assert_eq!(
@@ -566,7 +626,7 @@ mod tests {
         let voting_period = Duration::Time(2000000);
 
         let info = mock_info(OWNER, &[]);
-        setup_test_case(deps.as_mut(), info, threshold, voting_period).unwrap();
+        setup_test_case(deps.as_mut(), info).unwrap();
 
         let bank_msg = BankMsg::Send {
             to_address: SOMEBODY.into(),
@@ -606,7 +666,7 @@ mod tests {
         let voting_period = Duration::Time(2000000);
 
         let info = mock_info(OWNER, &[]);
-        setup_test_case(deps.as_mut(), info, threshold, voting_period).unwrap();
+        setup_test_case(deps.as_mut(), info).unwrap();
 
         let bank_msg = BankMsg::Send {
             to_address: SOMEBODY.into(),
@@ -673,7 +733,7 @@ mod tests {
         let voting_period = Duration::Time(2000000);
 
         let info = mock_info(OWNER, &[]);
-        setup_test_case(deps.as_mut(), info.clone(), threshold, voting_period).unwrap();
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         // Propose
         let bank_msg = BankMsg::Send {
@@ -897,7 +957,7 @@ mod tests {
         let voting_period = Duration::Time(2000000);
 
         let info = mock_info(OWNER, &[]);
-        setup_test_case(deps.as_mut(), info.clone(), threshold, voting_period).unwrap();
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         // Propose
         let bank_msg = BankMsg::Send {
@@ -975,7 +1035,7 @@ mod tests {
         let voting_period = Duration::Time(2000000);
 
         let info = mock_info(OWNER, &[]);
-        setup_test_case(deps.as_mut(), info.clone(), threshold, voting_period).unwrap();
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         // Propose
         let bank_msg = BankMsg::Send {
@@ -1065,7 +1125,7 @@ mod tests {
         let voting_period = Duration::Height(2000000);
 
         let info = mock_info(OWNER, &[]);
-        setup_test_case(deps.as_mut(), info.clone(), threshold, voting_period).unwrap();
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         // Propose
         let bank_msg = BankMsg::Send {
