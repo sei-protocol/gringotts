@@ -18,7 +18,8 @@ use cw_utils::{Expiration, ThresholdResponse};
 use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{next_id, BALLOTS, CONFIG, PROPOSALS, VOTERS, ADMINS, OPS, TRANCHE};
+use crate::state::{next_id, BALLOTS, CONFIG, PROPOSALS, VOTERS, ADMINS, OPS, DENOM,
+    VESTING_TIMESTAMPS, VESTING_AMOUNTS, UNLOCK_DISTRIBUTION_ADDRESS, STAKING_REWARD_ADDRESS};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:cw3-fixed-multisig";
@@ -46,7 +47,11 @@ pub fn instantiate(
     for op in msg.ops.iter() {
         OPS.save(deps.storage, op, &EmptyStruct{})?;
     }
-    TRANCHE.save(deps.storage, &msg.tranche)?;
+    DENOM.save(deps.storage, &msg.tranche.denom)?;
+    VESTING_TIMESTAMPS.save(deps.storage, &msg.tranche.vesting_timestamps)?;
+    VESTING_AMOUNTS.save(deps.storage, &msg.tranche.vesting_amounts)?;
+    UNLOCK_DISTRIBUTION_ADDRESS.save(deps.storage, &msg.tranche.unlocked_token_distribution_address)?;
+    STAKING_REWARD_ADDRESS.save(deps.storage, &msg.tranche.staking_reward_distribution_address)?;
     Ok(Response::default())
 }
 
@@ -467,6 +472,7 @@ mod tests {
                 Addr::unchecked(VOTER6),
             ],
             tranche: Tranche {
+                denom: "usei".to_string(),
                 vesting_amounts: vesting_amounts,
                 vesting_timestamps: vesting_timestamps,
                 unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
@@ -508,6 +514,7 @@ mod tests {
                 Addr::unchecked(VOTER5),
             ],
             tranche: Tranche {
+                denom: "usei".to_string(),
                 vesting_amounts: vec![1],
                 vesting_timestamps: vec![mock_env().block.time],
                 unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
@@ -530,6 +537,7 @@ mod tests {
             ],
             ops: vec![],
             tranche: Tranche {
+                denom: "usei".to_string(),
                 vesting_amounts: vec![1],
                 vesting_timestamps: vec![mock_env().block.time],
                 unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
@@ -552,6 +560,7 @@ mod tests {
                 Addr::unchecked(VOTER5),
             ],
             tranche: Tranche {
+                denom: "usei".to_string(),
                 vesting_amounts: vec![0],
                 vesting_timestamps: vec![mock_env().block.time],
                 unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),

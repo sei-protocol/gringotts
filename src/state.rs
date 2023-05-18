@@ -1,11 +1,11 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, StdResult, Storage};
+use cosmwasm_std::{Addr, StdResult, Storage, Timestamp};
 
 use cw3::{Ballot, Proposal};
 use cw_storage_plus::{Item, Map};
 use cw_utils::{Duration, Threshold};
 
-use crate::data_structure::{Tranche, EmptyStruct};
+use crate::data_structure::{EmptyStruct};
 
 #[cw_serde]
 pub struct Config {
@@ -31,7 +31,11 @@ pub fn next_id(store: &mut dyn Storage) -> StdResult<u64> {
     Ok(id)
 }
 
-pub const TRANCHE: Item<Tranche> = Item::new("tranches");
+pub const DENOM: Item<String> = Item::new("denom");
+pub const VESTING_TIMESTAMPS: Item<Vec<Timestamp>> = Item::new("ts");
+pub const VESTING_AMOUNTS: Item<Vec<u64>> = Item::new("amounts");
+pub const UNLOCK_DISTRIBUTION_ADDRESS: Item<Addr> = Item::new("uda");
+pub const STAKING_REWARD_ADDRESS: Item<Addr> = Item::new("sra");
 pub const WITHDRAWN_STAKING_REWARDS: Item<u64> = Item::new("wsr");
 
 pub const ADMINS: Map<&Addr, EmptyStruct> = Map::new("admins");

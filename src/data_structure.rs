@@ -8,6 +8,7 @@ pub struct EmptyStruct{}
 
 #[cw_serde]
 pub struct Tranche {
+    pub denom: String,
     pub vesting_timestamps: Vec<Timestamp>,
     pub vesting_amounts: Vec<u64>,
     pub unlocked_token_distribution_address: Addr,
