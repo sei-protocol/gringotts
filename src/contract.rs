@@ -18,7 +18,7 @@ use cw_utils::{Expiration, ThresholdResponse};
 use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{next_id, BALLOTS, CONFIG, PROPOSALS, VOTERS, ADMINS, OPS, next_tranche_id, TRANCHES};
+use crate::state::{next_id, BALLOTS, CONFIG, PROPOSALS, VOTERS, ADMINS, OPS, TRANCHE};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:cw3-fixed-multisig";
@@ -27,7 +27,7 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
-    env: Env,
+    _env: Env,
     _info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
@@ -37,11 +37,7 @@ pub fn instantiate(
     if msg.ops.is_empty() {
         return Err(ContractError::NoOps {});
     }
-    for tranche in msg.tranches.iter() {
-        if !tranche.validate(&env) {
-            return Err(ContractError::InvalidTranche {});
-        }
-    }
+    msg.tranche.validate()?;
 
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     for admin in msg.admins.iter() {
@@ -50,10 +46,7 @@ pub fn instantiate(
     for op in msg.ops.iter() {
         OPS.save(deps.storage, op, &EmptyStruct{})?;
     }
-    for tranche in msg.tranches.iter() {
-        let tranche_id = next_tranche_id(deps.storage)?;
-        TRANCHES.save(deps.storage, tranche_id, tranche)?;
-    }
+    TRANCHE.save(deps.storage, &msg.tranche)?;
     Ok(Response::default())
 }
 
@@ -414,8 +407,6 @@ fn list_voters(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
     use cosmwasm_std::{coin, from_binary, BankMsg, Decimal, Addr};
 
@@ -449,9 +440,7 @@ mod tests {
     const SOMEBODY: &str = "somebody";
 
     const UNLOCK_ADDR1: &str = "unlock0001";
-    const UNLOCK_ADDR2: &str = "unlock0002";
     const REWARD_ADDR1: &str = "reward0001";
-    const REWARD_ADDR2: &str = "reward0002";
 
     // this will set up the instantiation for other tests
     #[track_caller]
@@ -460,16 +449,12 @@ mod tests {
         info: MessageInfo,
     ) -> Result<Response<Empty>, ContractError> {
         let env = mock_env();
-        let mut vesting_schedule1 = vec![(env.block.time.seconds() + 31536000, 12000000u64)];
-        for installment in 1..37 {
-            vesting_schedule1.push((installment * 2592000 + vesting_schedule1[0].0, 1000000u64));
+        let mut vesting_amounts = vec![12000000u64];
+        let mut vesting_timestamps = vec![env.block.time.plus_seconds(31536000)];
+        for _ in 1..37 {
+            vesting_amounts.push(1000000u64);
+            vesting_timestamps.push(vesting_timestamps.last().unwrap().plus_seconds(2592000));
         }
-        let vesting_schedule1: [(u64, u64); 37] = vesting_schedule1.try_into().unwrap();
-        let mut vesting_schedule2 = vec![(env.block.time.seconds(), 12000000u64)];
-        for installment in 1..13 {
-            vesting_schedule2.push((installment * 2592000 + vesting_schedule2[0].0, 1000000u64));
-        }
-        let vesting_schedule2: [(u64, u64); 13] = vesting_schedule2.try_into().unwrap();
         let instantiate_msg = InstantiateMsg {
             admins: vec![
                 Addr::unchecked(VOTER1),
@@ -481,20 +466,12 @@ mod tests {
                 Addr::unchecked(VOTER5),
                 Addr::unchecked(VOTER6),
             ],
-            tranches: vec![
-                Tranche {
-                    amount: 48000000,
-                    unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
-                    staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
-                    vesting_schedule: HashMap::from(vesting_schedule1),
-                },
-                Tranche {
-                    amount: 24000000,
-                    unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR2),
-                    staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR2),
-                    vesting_schedule: HashMap::from(vesting_schedule2),
-                }
-            ],
+            tranche: Tranche {
+                vesting_amounts: vesting_amounts,
+                vesting_timestamps: vesting_timestamps,
+                unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
+                staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
+            },
         };
         instantiate(deps, mock_env(), info, instantiate_msg)
     }
@@ -530,14 +507,12 @@ mod tests {
             ops: vec![
                 Addr::unchecked(VOTER5),
             ],
-            tranches: vec![
-                Tranche {
-                    amount: 0,
-                    unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
-                    staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
-                    vesting_schedule: HashMap::new(),
-                },
-            ],
+            tranche: Tranche {
+                vesting_amounts: vec![1],
+                vesting_timestamps: vec![mock_env().block.time],
+                unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
+                staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
+            },
         };
         let err = instantiate(
             deps.as_mut(),
@@ -554,14 +529,12 @@ mod tests {
                 Addr::unchecked(VOTER1),
             ],
             ops: vec![],
-            tranches: vec![
-                Tranche {
-                    amount: 0,
-                    unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
-                    staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
-                    vesting_schedule: HashMap::new(),
-                },
-            ],
+            tranche: Tranche {
+                vesting_amounts: vec![1],
+                vesting_timestamps: vec![mock_env().block.time],
+                unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
+                staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
+            },
         };
         let err =
             instantiate(deps.as_mut(), mock_env(), info.clone(), instantiate_msg).unwrap_err();
@@ -578,20 +551,18 @@ mod tests {
             ops: vec![
                 Addr::unchecked(VOTER5),
             ],
-            tranches: vec![
-                Tranche {
-                    amount: 10,
-                    unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
-                    staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
-                    vesting_schedule: HashMap::from([(mock_env().block.time.seconds(), 12u64)]),
-                },
-            ],
+            tranche: Tranche {
+                vesting_amounts: vec![0],
+                vesting_timestamps: vec![mock_env().block.time],
+                unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
+                staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
+            },
         };
         let err =
             instantiate(deps.as_mut(), mock_env(), info.clone(), instantiate_msg).unwrap_err();
         assert_eq!(
             err,
-            ContractError::InvalidTranche {},
+            ContractError::InvalidTranche("Invalid tranche: mismatched vesting amounts and schedule".to_string()),
         );
 
         // All valid

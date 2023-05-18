@@ -50,6 +50,6 @@ pub enum ContractError {
     #[error("No operators")]
     NoOps {},
 
-    #[error("Invalid tranche")]
-    InvalidTranche {},
+    #[error("Invalid tranche: {0}")]
+    InvalidTranche(String),
 }

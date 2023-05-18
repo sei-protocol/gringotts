@@ -1,33 +1,34 @@
-use std::collections::HashMap;
-
 use cosmwasm_schema::{cw_serde};
-use cosmwasm_std::{Addr, Env};
+use cosmwasm_std::{Addr, Timestamp};
 
-pub type TrancheID = u64;
+use crate::ContractError;
 
 #[cw_serde]
 pub struct EmptyStruct{}
 
 #[cw_serde]
 pub struct Tranche {
-    pub amount: u64,
+    pub vesting_timestamps: Vec<Timestamp>,
+    pub vesting_amounts: Vec<u64>,
     pub unlocked_token_distribution_address: Addr,
     pub staking_reward_distribution_address: Addr,
-    pub vesting_schedule: HashMap<u64, u64>, // timestamp in seconds to amount vested
 }
 
 impl Tranche {
-    pub fn validate(&self, env: &Env) -> bool {
-        if self.amount == 0 {
-            return false;
+    pub fn validate(&self) -> Result<(), ContractError> {
+        if self.vesting_amounts.len() != self.vesting_amounts.len() {
+            return Err(ContractError::InvalidTranche("mismatched vesting amounts and schedule".to_string()));
         }
-        let mut total_vested: u64 = 0;
-        for (vesting_time, vested) in self.vesting_schedule.iter() {
-            if *vesting_time < env.block.time.seconds() {
-                return false
+        if self.vesting_amounts.len() == 0 {
+            return Err(ContractError::InvalidTranche("nothing to vest".to_string()));
+        }
+        let mut last_ts = Timestamp::from_seconds(0);
+        for ts in self.vesting_timestamps.iter() {
+            if *ts <= last_ts {
+                return Err(ContractError::InvalidTranche("vesting schedule must be monotonic increasing".to_string()));
             }
-            total_vested += *vested;
+            last_ts = ts.clone();
         }
-        self.amount == total_vested
+        Ok(())
     }
 }

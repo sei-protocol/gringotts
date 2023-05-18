@@ -9,7 +9,7 @@ use crate::data_structure::Tranche;
 pub struct InstantiateMsg {
     pub admins: Vec<Addr>,
     pub ops: Vec<Addr>,
-    pub tranches: Vec<Tranche>,
+    pub tranche: Tranche,
 }
 
 #[cw_serde]

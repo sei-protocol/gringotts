@@ -5,7 +5,7 @@ use cw3::{Ballot, Proposal};
 use cw_storage_plus::{Item, Map};
 use cw_utils::{Duration, Threshold};
 
-use crate::data_structure::{Tranche, EmptyStruct, TrancheID};
+use crate::data_structure::{Tranche, EmptyStruct};
 
 #[cw_serde]
 pub struct Config {
@@ -31,18 +31,8 @@ pub fn next_id(store: &mut dyn Storage) -> StdResult<u64> {
     Ok(id)
 }
 
-pub const TRANCHE_COUNT: Item<u64> = Item::new("tranche_count");
-
-pub fn next_tranche_id(store: &mut dyn Storage) -> StdResult<TrancheID> {
-    let id: u64 = TRANCHE_COUNT.may_load(store)?.unwrap_or_default() + 1;
-    TRANCHE_COUNT.save(store, &id)?;
-    Ok(id)
-}
-
-pub const TRANCHES: Map<TrancheID, Tranche> = Map::new("tranches");
+pub const TRANCHE: Item<Tranche> = Item::new("tranches");
+pub const WITHDRAWN_STAKING_REWARDS: Item<u64> = Item::new("wsr");
 
 pub const ADMINS: Map<&Addr, EmptyStruct> = Map::new("admins");
 pub const OPS: Map<&Addr, EmptyStruct> = Map::new("ops");
-
-pub const LOCKED_TOKENS: Map<TrancheID, u64> = Map::new("locked");
-pub const WITHDRAWN_STAKING_REWARDS: Map<TrancheID, u64> = Map::new("wsr");
