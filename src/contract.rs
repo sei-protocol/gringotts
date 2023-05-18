@@ -561,7 +561,7 @@ mod tests {
             ],
             tranche: Tranche {
                 denom: "usei".to_string(),
-                vesting_amounts: vec![0],
+                vesting_amounts: vec![],
                 vesting_timestamps: vec![mock_env().block.time],
                 unlocked_token_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
                 staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
@@ -571,7 +571,7 @@ mod tests {
             instantiate(deps.as_mut(), mock_env(), info.clone(), instantiate_msg).unwrap_err();
         assert_eq!(
             err,
-            ContractError::InvalidTranche("Invalid tranche: mismatched vesting amounts and schedule".to_string()),
+            ContractError::InvalidTranche("nothing to vest".to_string()),
         );
 
         // All valid
