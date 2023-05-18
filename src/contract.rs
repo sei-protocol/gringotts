@@ -11,6 +11,7 @@ use cw2::set_contract_version;
 use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::permission::autorize_op;
 use crate::staking::{delegate, redelegate, undelegate};
 use crate::state::{ADMINS, OPS, DENOM,
     VESTING_TIMESTAMPS, VESTING_AMOUNTS, UNLOCK_DISTRIBUTION_ADDRESS, STAKING_REWARD_ADDRESS};
@@ -53,37 +54,40 @@ pub fn instantiate(
 pub fn execute(
     deps: DepsMut,
     _env: Env,
-    _info: MessageInfo,
+    info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response<Empty>, ContractError> {
     match msg {
         ExecuteMsg::Delegate {
             validator, amount,
-        } => execute_delegate(deps.as_ref(), validator, amount),
+        } => execute_delegate(deps.as_ref(), info, validator, amount),
         ExecuteMsg::Redelegate {
             src_validator, dst_validator, amount
-        } => execute_redelegate(deps.as_ref(), src_validator, dst_validator, amount),
+        } => execute_redelegate(deps.as_ref(), info, src_validator, dst_validator, amount),
         ExecuteMsg::Undelegate {
             validator, amount,
-        } => execute_undelegate(deps.as_ref(), validator, amount),
+        } => execute_undelegate(deps.as_ref(), info, validator, amount),
     }
 }
 
-fn execute_delegate(deps: Deps, validator: String, amount: u64) -> Result<Response<Empty>, ContractError> {
+fn execute_delegate(deps: Deps, info: MessageInfo, validator: String, amount: u64) -> Result<Response<Empty>, ContractError> {
+    autorize_op(deps.storage, info.sender)?;
     let denom = DENOM.load(deps.storage)?;
     let mut response = Response::new();
     response = delegate(response, validator, amount, denom);
     Ok(response)
 }
 
-fn execute_redelegate(deps: Deps, src_validator: String, dst_validator: String, amount: u64) -> Result<Response<Empty>, ContractError> {
+fn execute_redelegate(deps: Deps, info: MessageInfo, src_validator: String, dst_validator: String, amount: u64) -> Result<Response<Empty>, ContractError> {
+    autorize_op(deps.storage, info.sender)?;
     let denom = DENOM.load(deps.storage)?;
     let mut response = Response::new();
     response = redelegate(response, src_validator, dst_validator, amount, denom);
     Ok(response)
 }
 
-fn execute_undelegate(deps: Deps, validator: String, amount: u64) -> Result<Response<Empty>, ContractError> {
+fn execute_undelegate(deps: Deps, info: MessageInfo, validator: String, amount: u64) -> Result<Response<Empty>, ContractError> {
+    autorize_op(deps.storage, info.sender)?;
     let denom = DENOM.load(deps.storage)?;
     let mut response = Response::new();
     response = undelegate(response, validator, amount, denom);
@@ -253,7 +257,7 @@ mod tests {
     fn delegate_work() {
         let mut deps = mock_dependencies();
 
-        let info = mock_info(OWNER, &[]);
+        let info = mock_info(VOTER5, &[]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let msg = ExecuteMsg::Delegate { validator: "val".to_string(), amount: 100 };
@@ -262,10 +266,21 @@ mod tests {
     }
 
     #[test]
-    fn redelegate_work() {
+    fn delegate_unauthorized() {
         let mut deps = mock_dependencies();
 
         let info = mock_info(OWNER, &[]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let msg = ExecuteMsg::Delegate { validator: "val".to_string(), amount: 100 };
+        execute(deps.as_mut(), mock_env(), info, msg).unwrap_err();
+    }
+
+    #[test]
+    fn redelegate_work() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(VOTER5, &[]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let msg = ExecuteMsg::Redelegate { src_validator: "val1".to_string(), dst_validator: "val2".to_string(), amount: 100 };
@@ -274,14 +289,36 @@ mod tests {
     }
 
     #[test]
+    fn redelegate_unauthorized() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let msg = ExecuteMsg::Redelegate { src_validator: "val1".to_string(), dst_validator: "val2".to_string(), amount: 100 };
+        execute(deps.as_mut(), mock_env(), info, msg).unwrap_err();
+    }
+
+    #[test]
     fn undelegate_work() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(VOTER5, &[]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let msg = ExecuteMsg::Undelegate { validator: "val".to_string(), amount: 100 };
+        let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+        assert_eq!(1, res.messages.len());
+    }
+
+    #[test]
+    fn undelegate_unauthorized() {
         let mut deps = mock_dependencies();
 
         let info = mock_info(OWNER, &[]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let msg = ExecuteMsg::Undelegate { validator: "val".to_string(), amount: 100 };
-        let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
-        assert_eq!(1, res.messages.len());
+        execute(deps.as_mut(), mock_env(), info, msg).unwrap_err();
     }
 }
