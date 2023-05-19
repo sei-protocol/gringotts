@@ -52,4 +52,7 @@ pub enum ContractError {
 
     #[error("Invalid tranche: {0}")]
     InvalidTranche(String),
+
+    #[error("No sufficient unlocked amount")]
+    NoSufficientUnlockedAmount {},
 }

@@ -14,16 +14,19 @@ pub struct InstantiateMsg {
 pub enum ExecuteMsg {
     Delegate {
         validator: String,
-        amount: u64,
+        amount: u128,
     },
     Redelegate {
         src_validator: String,
         dst_validator: String,
-        amount: u64,
+        amount: u128,
     },
     Undelegate {
         validator: String,
-        amount: u64,
+        amount: u128,
+    },
+    InitiateWithdrawUnlocked {
+        amount: u128,
     },
 }
 
