@@ -12,7 +12,7 @@ use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::permission::authorize_op;
-use crate::staking::{delegate, redelegate, undelegate, withdraw_delegation_rewards};
+use crate::staking::{delegate, redelegate, undelegate, withdraw_delegation_rewards, get_delegation_rewards};
 use crate::state::{ADMINS, OPS, DENOM,
     VESTING_TIMESTAMPS, VESTING_AMOUNTS, UNLOCK_DISTRIBUTION_ADDRESS, STAKING_REWARD_ADDRESS};
 use crate::vesting::{collect_vested, distribute_vested};
@@ -69,7 +69,7 @@ pub fn execute(
             validator, amount,
         } => execute_undelegate(deps.as_ref(), info, validator, amount),
         ExecuteMsg::InitiateWithdrawUnlocked {} => execute_initiate_withdraw_unlocked(deps, env, info),
-        ExecuteMsg::InitiateWithdrawReward { validator } => execute_initiate_withdraw_reward(deps.as_ref(), info, validator),
+        ExecuteMsg::InitiateWithdrawReward { validator } => execute_initiate_withdraw_reward(deps.as_ref(), env, info, validator),
     }
 }
 
@@ -103,9 +103,10 @@ fn execute_initiate_withdraw_unlocked(deps: DepsMut, env: Env, info: MessageInfo
     distribute_vested(deps.storage, vested_amount, Response::new())
 }
 
-fn execute_initiate_withdraw_reward(deps: Deps, info: MessageInfo, validator: String) -> Result<Response<Empty>, ContractError> {
+fn execute_initiate_withdraw_reward(deps: Deps, env: Env, info: MessageInfo, validator: String) -> Result<Response<Empty>, ContractError> {
     authorize_op(deps.storage, info.sender)?;
-    Ok(withdraw_delegation_rewards(Response::new(), validator))
+    let withdrawable_amount = get_delegation_rewards(deps, env, validator.clone())?;
+    withdraw_delegation_rewards(deps, Response::new(), validator, withdrawable_amount)
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -376,7 +377,7 @@ mod tests {
 
         let msg = ExecuteMsg::InitiateWithdrawReward { validator: "val".to_string() };
         let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
-        assert_eq!(1, res.messages.len());
+        assert_eq!(2, res.messages.len());
     }
 
     #[test]
