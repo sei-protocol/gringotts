@@ -1,4 +1,4 @@
-use cosmwasm_std::{StakingMsg, Response, Coin};
+use cosmwasm_std::{StakingMsg, Response, Coin, DistributionMsg};
 
 pub fn delegate(response: Response, validator: String, amount: u128, denom: String) -> Response {
     let msg = StakingMsg::Delegate {
@@ -22,5 +22,10 @@ pub fn undelegate(response: Response, validator: String, amount: u128, denom: St
         validator,
         amount: Coin::new(amount.into(), denom),
     };
+    response.add_message(msg)
+}
+
+pub fn withdraw_delegation_rewards(response: Response, validator: String) -> Response {
+    let msg = DistributionMsg::WithdrawDelegatorReward { validator: validator };
     response.add_message(msg)
 }
