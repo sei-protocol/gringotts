@@ -1,4 +1,4 @@
-use cosmwasm_std::{StakingMsg, Response, Coin, Deps, Env, DistributionMsg, BankMsg};
+use cosmwasm_std::{StakingMsg, Response, Coin, Deps, Env, DistributionMsg, BankMsg, coins};
 
 use crate::{ContractError, state::{DENOM, STAKING_REWARD_ADDRESS}};
 
@@ -31,7 +31,7 @@ pub fn withdraw_delegation_rewards(deps: Deps, response: Response, validator: St
     let msg = DistributionMsg::WithdrawDelegatorReward { validator: validator };
     let denom = DENOM.load(deps.storage)?;
     let to_address = STAKING_REWARD_ADDRESS.load(deps.storage)?;
-    let send_msg = BankMsg::Send { to_address: to_address.to_string(), amount: vec![Coin::new(amount, denom)] };
+    let send_msg = BankMsg::Send { to_address: to_address.to_string(), amount: coins(amount, denom) };
     let mut new_response = response.add_message(msg);
     new_response = new_response.add_message(send_msg);
     Ok(new_response)
