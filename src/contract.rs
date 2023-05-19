@@ -103,10 +103,10 @@ pub fn query(_deps: Deps, _env: Env, _msg: QueryMsg) -> StdResult<Binary> {
 #[cfg(test)]
 mod tests {
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{coin, from_binary, BankMsg, Decimal, Addr, Coin};
+    use cosmwasm_std::{Addr, Coin};
 
     use cw2::{get_contract_version, ContractVersion};
-    use cw_utils::{Duration, Threshold};
+    use cw_utils::{Duration};
 
     use crate::data_structure::{Tranche};
 
@@ -257,7 +257,7 @@ mod tests {
     fn delegate_work() {
         let mut deps = mock_dependencies();
 
-        let info = mock_info(VOTER5, &[]);
+        let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let msg = ExecuteMsg::Delegate { validator: "val".to_string(), amount: 100 };
@@ -269,7 +269,7 @@ mod tests {
     fn delegate_unauthorized() {
         let mut deps = mock_dependencies();
 
-        let info = mock_info(OWNER, &[]);
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let msg = ExecuteMsg::Delegate { validator: "val".to_string(), amount: 100 };
@@ -280,7 +280,7 @@ mod tests {
     fn redelegate_work() {
         let mut deps = mock_dependencies();
 
-        let info = mock_info(VOTER5, &[]);
+        let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let msg = ExecuteMsg::Redelegate { src_validator: "val1".to_string(), dst_validator: "val2".to_string(), amount: 100 };
@@ -292,7 +292,7 @@ mod tests {
     fn redelegate_unauthorized() {
         let mut deps = mock_dependencies();
 
-        let info = mock_info(OWNER, &[]);
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let msg = ExecuteMsg::Redelegate { src_validator: "val1".to_string(), dst_validator: "val2".to_string(), amount: 100 };
@@ -303,7 +303,7 @@ mod tests {
     fn undelegate_work() {
         let mut deps = mock_dependencies();
 
-        let info = mock_info(VOTER5, &[]);
+        let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let msg = ExecuteMsg::Undelegate { validator: "val".to_string(), amount: 100 };
@@ -315,7 +315,7 @@ mod tests {
     fn undelegate_unauthorized() {
         let mut deps = mock_dependencies();
 
-        let info = mock_info(OWNER, &[]);
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let msg = ExecuteMsg::Undelegate { validator: "val".to_string(), amount: 100 };
