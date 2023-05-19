@@ -22,14 +22,14 @@ use crate::state::{next_id, BALLOTS, CONFIG, PROPOSALS, VOTERS, ADMINS, OPS, DEN
     VESTING_TIMESTAMPS, VESTING_AMOUNTS, UNLOCK_DISTRIBUTION_ADDRESS, STAKING_REWARD_ADDRESS};
 
 // version info for migration info
-const CONTRACT_NAME: &str = "crates.io:cw3-fixed-multisig";
+const CONTRACT_NAME: &str = "crates.io:sei-gringotts";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
     _env: Env,
-    _info: MessageInfo,
+    info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
     if msg.admins.is_empty() {
@@ -38,7 +38,7 @@ pub fn instantiate(
     if msg.ops.is_empty() {
         return Err(ContractError::NoOps {});
     }
-    msg.tranche.validate()?;
+    msg.tranche.validate(info.funds)?;
 
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     for admin in msg.admins.iter() {
@@ -413,7 +413,7 @@ fn list_voters(
 #[cfg(test)]
 mod tests {
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{coin, from_binary, BankMsg, Decimal, Addr};
+    use cosmwasm_std::{coin, from_binary, BankMsg, Decimal, Addr, Coin};
 
     use cw2::{get_contract_version, ContractVersion};
     use cw_utils::{Duration, Threshold};
@@ -454,10 +454,10 @@ mod tests {
         info: MessageInfo,
     ) -> Result<Response<Empty>, ContractError> {
         let env = mock_env();
-        let mut vesting_amounts = vec![12000000u64];
+        let mut vesting_amounts = vec![12000000u128];
         let mut vesting_timestamps = vec![env.block.time.plus_seconds(31536000)];
         for _ in 1..37 {
-            vesting_amounts.push(1000000u64);
+            vesting_amounts.push(1000000u128);
             vesting_timestamps.push(vesting_timestamps.last().unwrap().plus_seconds(2592000));
         }
         let instantiate_msg = InstantiateMsg {
@@ -574,8 +574,15 @@ mod tests {
             ContractError::InvalidTranche("nothing to vest".to_string()),
         );
 
-        // All valid
-        let _threshold = Threshold::AbsoluteCount { weight: 1 };
+        // insufficient funds
+        let err = setup_test_case(deps.as_mut(), info).unwrap_err();
+        assert_eq!(
+            err,
+            ContractError::InvalidTranche("insufficient deposit for the vesting plan".to_string()),
+        );
+
+        // happy path
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info).unwrap();
 
         // Verify

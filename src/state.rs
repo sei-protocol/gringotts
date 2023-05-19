@@ -33,10 +33,10 @@ pub fn next_id(store: &mut dyn Storage) -> StdResult<u64> {
 
 pub const DENOM: Item<String> = Item::new("denom");
 pub const VESTING_TIMESTAMPS: Item<Vec<Timestamp>> = Item::new("ts");
-pub const VESTING_AMOUNTS: Item<Vec<u64>> = Item::new("amounts");
+pub const VESTING_AMOUNTS: Item<Vec<u128>> = Item::new("amounts");
 pub const UNLOCK_DISTRIBUTION_ADDRESS: Item<Addr> = Item::new("uda");
 pub const STAKING_REWARD_ADDRESS: Item<Addr> = Item::new("sra");
-pub const WITHDRAWN_STAKING_REWARDS: Item<u64> = Item::new("wsr");
+pub const WITHDRAWN_STAKING_REWARDS: Item<u128> = Item::new("wsr");
 
 pub const ADMINS: Map<&Addr, EmptyStruct> = Map::new("admins");
 pub const OPS: Map<&Addr, EmptyStruct> = Map::new("ops");
