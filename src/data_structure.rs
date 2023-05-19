@@ -20,7 +20,7 @@ impl Tranche {
         if self.vesting_amounts.len() != self.vesting_amounts.len() {
             return Err(ContractError::InvalidTranche("mismatched vesting amounts and schedule".to_string()));
         }
-        if self.vesting_amounts.len() == 0 {
+        if self.vesting_amounts.is_empty() {
             return Err(ContractError::InvalidTranche("nothing to vest".to_string()));
         }
         let mut total_vesting_amount = 0u128;
@@ -44,7 +44,7 @@ impl Tranche {
             if *ts <= last_ts {
                 return Err(ContractError::InvalidTranche("vesting schedule must be monotonic increasing".to_string()));
             }
-            last_ts = ts.clone();
+            last_ts = *ts;
         }
         Ok(())
     }
