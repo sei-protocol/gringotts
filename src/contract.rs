@@ -11,7 +11,7 @@ use cw2::set_contract_version;
 use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::permission::autorize_op;
+use crate::permission::authorize_op;
 use crate::staking::{delegate, redelegate, undelegate};
 use crate::state::{ADMINS, OPS, DENOM,
     VESTING_TIMESTAMPS, VESTING_AMOUNTS, UNLOCK_DISTRIBUTION_ADDRESS, STAKING_REWARD_ADDRESS};
@@ -73,7 +73,7 @@ pub fn execute(
 }
 
 fn execute_delegate(deps: Deps, info: MessageInfo, validator: String, amount: u128) -> Result<Response<Empty>, ContractError> {
-    autorize_op(deps.storage, info.sender)?;
+    authorize_op(deps.storage, info.sender)?;
     let denom = DENOM.load(deps.storage)?;
     let mut response = Response::new();
     response = delegate(response, validator, amount, denom);
@@ -81,7 +81,7 @@ fn execute_delegate(deps: Deps, info: MessageInfo, validator: String, amount: u1
 }
 
 fn execute_redelegate(deps: Deps, info: MessageInfo, src_validator: String, dst_validator: String, amount: u128) -> Result<Response<Empty>, ContractError> {
-    autorize_op(deps.storage, info.sender)?;
+    authorize_op(deps.storage, info.sender)?;
     let denom = DENOM.load(deps.storage)?;
     let mut response = Response::new();
     response = redelegate(response, src_validator, dst_validator, amount, denom);
@@ -89,7 +89,7 @@ fn execute_redelegate(deps: Deps, info: MessageInfo, src_validator: String, dst_
 }
 
 fn execute_undelegate(deps: Deps, info: MessageInfo, validator: String, amount: u128) -> Result<Response<Empty>, ContractError> {
-    autorize_op(deps.storage, info.sender)?;
+    authorize_op(deps.storage, info.sender)?;
     let denom = DENOM.load(deps.storage)?;
     let mut response = Response::new();
     response = undelegate(response, validator, amount, denom);
@@ -97,7 +97,7 @@ fn execute_undelegate(deps: Deps, info: MessageInfo, validator: String, amount: 
 }
 
 fn execute_initiate_withdraw_unlocked(deps: DepsMut, env: Env, info: MessageInfo, amount: u128) -> Result<Response<Empty>, ContractError> {
-    autorize_op(deps.storage, info.sender)?;
+    authorize_op(deps.storage, info.sender)?;
     collect_vested(deps.storage, env.block.time, amount)?;
     distribute_vested(deps.storage, amount, Response::new())
 }

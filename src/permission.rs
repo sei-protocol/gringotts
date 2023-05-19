@@ -2,14 +2,14 @@ use cosmwasm_std::{Storage, Addr};
 
 use crate::{ContractError, state::{OPS, ADMINS}};
 
-pub fn autorize_op(store: &dyn Storage, caller: Addr) -> Result<(), ContractError> {
+pub fn authorize_op(store: &dyn Storage, caller: Addr) -> Result<(), ContractError> {
     match OPS.load(store, &caller) {
         Ok(_) => Ok(()),
         Err(_) => Err(ContractError::Unauthorized {})
     }
 }
 
-pub fn autorize_admin(store: &dyn Storage, caller: Addr) -> Result<(), ContractError> {
+pub fn authorize_admin(store: &dyn Storage, caller: Addr) -> Result<(), ContractError> {
     match ADMINS.load(store, &caller) {
         Ok(_) => Ok(()),
         Err(_) => Err(ContractError::Unauthorized {})
@@ -31,22 +31,22 @@ mod tests {
     const BAD_ADMIN: &str = "bad_admin";
 
     #[test]
-    fn test_autorize_op() {
+    fn test_authorize_op() {
         let mut deps = mock_dependencies();
         let deps_mut = deps.as_mut();
         OPS.save(deps_mut.storage, &Addr::unchecked(GOOD_OP), &EmptyStruct {}).unwrap();
 
-        autorize_op(deps.as_ref().storage, Addr::unchecked(GOOD_OP)).unwrap();
-        autorize_op(deps.as_ref().storage, Addr::unchecked(BAD_OP)).unwrap_err();
+        authorize_op(deps.as_ref().storage, Addr::unchecked(GOOD_OP)).unwrap();
+        authorize_op(deps.as_ref().storage, Addr::unchecked(BAD_OP)).unwrap_err();
     }
 
     #[test]
-    fn test_autorize_admin() {
+    fn test_authorize_admin() {
         let mut deps = mock_dependencies();
         let deps_mut = deps.as_mut();
         ADMINS.save(deps_mut.storage, &Addr::unchecked(GOOD_ADMIN), &EmptyStruct {}).unwrap();
 
-        autorize_admin(deps.as_ref().storage, Addr::unchecked(GOOD_ADMIN)).unwrap();
-        autorize_admin(deps.as_ref().storage, Addr::unchecked(BAD_ADMIN)).unwrap_err();
+        authorize_admin(deps.as_ref().storage, Addr::unchecked(GOOD_ADMIN)).unwrap();
+        authorize_admin(deps.as_ref().storage, Addr::unchecked(BAD_ADMIN)).unwrap_err();
     }
 }

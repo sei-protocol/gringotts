@@ -19,12 +19,10 @@ pub fn collect_vested(storage: &mut dyn Storage, now: Timestamp, amount: u128) -
     let mut amount_to_collect = amount;
     for vested_amount in vested_amounts.iter() {
         if amount_to_collect > 0 {
-            if amount_to_collect > *vested_amount {
+            if amount_to_collect >= *vested_amount {
                 amount_to_collect -= *vested_amount;
-            } else if amount_to_collect < *vested_amount {
+            } else {
                 remaining_vesting_amounts.push(*vested_amount - amount_to_collect);
-                amount_to_collect = 0;
-            } else { // equal case
                 amount_to_collect = 0;
             }
         } else {
