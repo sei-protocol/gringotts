@@ -25,9 +25,7 @@ pub enum ExecuteMsg {
         validator: String,
         amount: u128,
     },
-    InitiateWithdrawUnlocked {
-        amount: u128,
-    },
+    InitiateWithdrawUnlocked {},
 }
 
 #[cw_serde]

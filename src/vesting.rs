@@ -2,10 +2,7 @@ use cosmwasm_std::{Storage, Timestamp, Response, BankMsg, Coin};
 
 use crate::{ContractError, state::{VESTING_TIMESTAMPS, VESTING_AMOUNTS, UNLOCK_DISTRIBUTION_ADDRESS, DENOM}};
 
-pub fn collect_vested(storage: &mut dyn Storage, now: Timestamp, amount: u128) -> Result<(), ContractError> {
-    if amount == 0 {
-        return Ok(())
-    }
+pub fn collect_vested(storage: &mut dyn Storage, now: Timestamp) -> Result<u128, ContractError> {
     let vesting_ts = VESTING_TIMESTAMPS.load(storage)?;
     let mut earliest_unvested_ts_idx = 0;
     for ts in vesting_ts.iter() {
@@ -13,31 +10,21 @@ pub fn collect_vested(storage: &mut dyn Storage, now: Timestamp, amount: u128) -
             earliest_unvested_ts_idx += 1;
         }
     }
+    if earliest_unvested_ts_idx == 0 {
+        return Ok(0);
+    }
     let vesting_amounts = VESTING_AMOUNTS.load(storage)?;
     let vested_amounts = vesting_amounts[..earliest_unvested_ts_idx].to_vec();
-    let mut remaining_vesting_amounts: Vec<u128> = vec![];
-    let mut amount_to_collect = amount;
+    let remaining_vesting_amounts = vesting_amounts[earliest_unvested_ts_idx..].to_vec();
+    let mut total_vested_amount = 0u128;
     for vested_amount in vested_amounts.iter() {
-        if amount_to_collect > 0 {
-            if amount_to_collect >= *vested_amount {
-                amount_to_collect -= *vested_amount;
-            } else {
-                remaining_vesting_amounts.push(*vested_amount - amount_to_collect);
-                amount_to_collect = 0;
-            }
-        } else {
-            remaining_vesting_amounts.push(*vested_amount);
-        }
+        total_vested_amount += *vested_amount;
     }
-    if amount_to_collect > 0 {
-        return Err(ContractError::NoSufficientUnlockedAmount {});
-    }
-    remaining_vesting_amounts.append(&mut vesting_amounts[earliest_unvested_ts_idx..].to_vec());
-    let remaining_vesting_ts = vesting_ts[vesting_ts.len() - remaining_vesting_amounts.len()..].to_vec();
+    let remaining_vesting_ts = vesting_ts[earliest_unvested_ts_idx..].to_vec();
     VESTING_AMOUNTS.save(storage, &remaining_vesting_amounts)?;
     VESTING_TIMESTAMPS.save(storage, &remaining_vesting_ts)?;
 
-    Ok(())
+    Ok(total_vested_amount)
 }
 
 pub fn distribute_vested(storage: &dyn Storage, amount: u128, response: Response) -> Result<Response, ContractError> {
@@ -55,19 +42,9 @@ mod tests {
     use cosmwasm_std::{Response, Addr};
     use cosmwasm_std::testing::{mock_dependencies, mock_env};
 
-    use crate::ContractError;
     use crate::state::{VESTING_TIMESTAMPS, VESTING_AMOUNTS, DENOM, UNLOCK_DISTRIBUTION_ADDRESS};
 
     use super::{collect_vested, distribute_vested};
-
-    #[test]
-    fn test_zero_amount() {
-        let mut deps = mock_dependencies();
-        let deps_mut = deps.as_mut();
-        let now = mock_env().block.time;
-
-        collect_vested(deps_mut.storage, now, 0).unwrap();
-    }
 
     #[test]
     fn test_nothing_to_vest() {
@@ -77,74 +54,72 @@ mod tests {
         VESTING_TIMESTAMPS.save(deps_mut.storage, &vec![]).unwrap();
         VESTING_AMOUNTS.save(deps_mut.storage, &vec![]).unwrap();
 
-        let err = collect_vested(deps_mut.storage, now, 10).unwrap_err();
-        assert_eq!(err, ContractError::NoSufficientUnlockedAmount {});
+        assert_eq!(0, collect_vested(deps_mut.storage, now).unwrap());
     }
 
     #[test]
-    fn test_vest_single_full() {
+    fn test_vest_single() {
         let mut deps = mock_dependencies();
         let deps_mut = deps.as_mut();
         let now = mock_env().block.time;
         VESTING_TIMESTAMPS.save(deps_mut.storage, &vec![now]).unwrap();
         VESTING_AMOUNTS.save(deps_mut.storage, &vec![10]).unwrap();
 
-        collect_vested(deps_mut.storage, now, 10).unwrap();
+        assert_eq!(10, collect_vested(deps_mut.storage, now).unwrap());
         assert_eq!(VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(), vec![]);
         assert_eq!(VESTING_AMOUNTS.load(deps_mut.storage).unwrap(), vec![]);
     }
 
     #[test]
-    fn test_vest_single_partial() {
+    fn test_not_vest_single() {
         let mut deps = mock_dependencies();
         let deps_mut = deps.as_mut();
         let now = mock_env().block.time;
-        VESTING_TIMESTAMPS.save(deps_mut.storage, &vec![now]).unwrap();
+        VESTING_TIMESTAMPS.save(deps_mut.storage, &vec![now.plus_seconds(1)]).unwrap();
         VESTING_AMOUNTS.save(deps_mut.storage, &vec![10]).unwrap();
 
-        collect_vested(deps_mut.storage, now, 5).unwrap();
-        assert_eq!(VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(), vec![now]);
-        assert_eq!(VESTING_AMOUNTS.load(deps_mut.storage).unwrap(), vec![5u128]);
+        assert_eq!(0, collect_vested(deps_mut.storage, now).unwrap());
+        assert_eq!(VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(), vec![now.plus_seconds(1)]);
+        assert_eq!(VESTING_AMOUNTS.load(deps_mut.storage).unwrap(), vec![10]);
     }
 
     #[test]
-    fn test_vest_multiple_full() {
+    fn test_vest_multiple() {
         let mut deps = mock_dependencies();
         let deps_mut = deps.as_mut();
         let now = mock_env().block.time;
         VESTING_TIMESTAMPS.save(deps_mut.storage, &vec![now.minus_seconds(1), now, now.plus_seconds(1)]).unwrap();
         VESTING_AMOUNTS.save(deps_mut.storage, &vec![10, 9, 11]).unwrap();
 
-        collect_vested(deps_mut.storage, now, 19).unwrap();
+        assert_eq!(19, collect_vested(deps_mut.storage, now).unwrap());
         assert_eq!(VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(), vec![now.plus_seconds(1)]);
         assert_eq!(VESTING_AMOUNTS.load(deps_mut.storage).unwrap(), vec![11u128]);
     }
 
     #[test]
-    fn test_vest_multiple_partial() {
+    fn test_vest_multiple_all() {
         let mut deps = mock_dependencies();
         let deps_mut = deps.as_mut();
         let now = mock_env().block.time;
-        VESTING_TIMESTAMPS.save(deps_mut.storage, &vec![now.minus_seconds(1), now, now.plus_seconds(1)]).unwrap();
+        VESTING_TIMESTAMPS.save(deps_mut.storage, &vec![now.minus_seconds(2), now.minus_seconds(1), now]).unwrap();
         VESTING_AMOUNTS.save(deps_mut.storage, &vec![10, 9, 11]).unwrap();
 
-        collect_vested(deps_mut.storage, now, 15).unwrap();
-        assert_eq!(VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(), vec![now, now.plus_seconds(1)]);
-        assert_eq!(VESTING_AMOUNTS.load(deps_mut.storage).unwrap(), vec![4u128, 11u128]);
+        assert_eq!(30, collect_vested(deps_mut.storage, now).unwrap());
+        assert_eq!(VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(), vec![]);
+        assert_eq!(VESTING_AMOUNTS.load(deps_mut.storage).unwrap(), vec![]);
     }
 
     #[test]
-    fn test_vest_multiple_insufficient() {
+    fn test_vest_multiple_none() {
         let mut deps = mock_dependencies();
         let deps_mut = deps.as_mut();
         let now = mock_env().block.time;
-        VESTING_TIMESTAMPS.save(deps_mut.storage, &vec![now.minus_seconds(1), now, now.plus_seconds(1)]).unwrap();
+        VESTING_TIMESTAMPS.save(deps_mut.storage, &vec![now.plus_seconds(1), now.plus_seconds(2), now.plus_seconds(3)]).unwrap();
         VESTING_AMOUNTS.save(deps_mut.storage, &vec![10, 9, 11]).unwrap();
 
-        let err = collect_vested(deps_mut.storage, now, 31).unwrap_err();
-        assert_eq!(err, ContractError::NoSufficientUnlockedAmount {});
-        assert_eq!(VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(), vec![now.minus_seconds(1), now, now.plus_seconds(1)]);
-        assert_eq!(VESTING_AMOUNTS.load(deps_mut.storage).unwrap(), vec![10u128, 9u128, 11u128]);
+        assert_eq!(0, collect_vested(deps_mut.storage, now).unwrap());
+        assert_eq!(VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(), vec![now.plus_seconds(1), now.plus_seconds(2), now.plus_seconds(3)]);
+        assert_eq!(VESTING_AMOUNTS.load(deps_mut.storage).unwrap(), vec![10, 9, 11]);
     }
 
     #[test]

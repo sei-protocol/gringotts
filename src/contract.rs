@@ -68,7 +68,7 @@ pub fn execute(
         ExecuteMsg::Undelegate {
             validator, amount,
         } => execute_undelegate(deps.as_ref(), info, validator, amount),
-        ExecuteMsg::InitiateWithdrawUnlocked { amount } => execute_initiate_withdraw_unlocked(deps, env, info, amount),
+        ExecuteMsg::InitiateWithdrawUnlocked {} => execute_initiate_withdraw_unlocked(deps, env, info),
     }
 }
 
@@ -96,10 +96,10 @@ fn execute_undelegate(deps: Deps, info: MessageInfo, validator: String, amount: 
     Ok(response)
 }
 
-fn execute_initiate_withdraw_unlocked(deps: DepsMut, env: Env, info: MessageInfo, amount: u128) -> Result<Response<Empty>, ContractError> {
+fn execute_initiate_withdraw_unlocked(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response<Empty>, ContractError> {
     authorize_op(deps.storage, info.sender)?;
-    collect_vested(deps.storage, env.block.time, amount)?;
-    distribute_vested(deps.storage, amount, Response::new())
+    let vested_amount = collect_vested(deps.storage, env.block.time)?;
+    distribute_vested(deps.storage, vested_amount, Response::new())
 }
 
 
@@ -337,7 +337,7 @@ mod tests {
         let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
-        let msg = ExecuteMsg::InitiateWithdrawUnlocked { amount: 1000000 };
+        let msg = ExecuteMsg::InitiateWithdrawUnlocked {};
         let mut env = mock_env();
         let mut block = env.block;
         block.time = block.time.plus_seconds(31536000);
@@ -347,29 +347,13 @@ mod tests {
     }
 
     #[test]
-    fn initiate_withdraw_unlocked_insufficient() {
-        let mut deps = mock_dependencies();
-
-        let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
-        setup_test_case(deps.as_mut(), info.clone()).unwrap();
-
-        let msg = ExecuteMsg::InitiateWithdrawUnlocked { amount: 13000000 };
-        let mut env = mock_env();
-        let mut block = env.block;
-        block.time = block.time.plus_seconds(31536000);
-        env.block = block;
-        let err = execute(deps.as_mut(), mock_env(), info, msg).unwrap_err();
-        assert_eq!(err, ContractError::NoSufficientUnlockedAmount {});
-    }
-
-    #[test]
     fn initiate_withdraw_unlocked_unauthorized() {
         let mut deps = mock_dependencies();
 
         let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
-        let msg = ExecuteMsg::InitiateWithdrawUnlocked { amount: 1000000 };
+        let msg = ExecuteMsg::InitiateWithdrawUnlocked {};
         let mut env = mock_env();
         let mut block = env.block;
         block.time = block.time.plus_seconds(31536000);
