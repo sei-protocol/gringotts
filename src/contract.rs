@@ -11,10 +11,11 @@ use cw2::set_contract_version;
 use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::permission::autorize_op;
+use crate::permission::authorize_op;
 use crate::staking::{delegate, redelegate, undelegate};
 use crate::state::{ADMINS, OPS, DENOM,
     VESTING_TIMESTAMPS, VESTING_AMOUNTS, UNLOCK_DISTRIBUTION_ADDRESS, STAKING_REWARD_ADDRESS};
+use crate::vesting::{collect_vested, distribute_vested};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:sei-gringotts";
@@ -53,7 +54,7 @@ pub fn instantiate(
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response<Empty>, ContractError> {
@@ -67,31 +68,38 @@ pub fn execute(
         ExecuteMsg::Undelegate {
             validator, amount,
         } => execute_undelegate(deps.as_ref(), info, validator, amount),
+        ExecuteMsg::InitiateWithdrawUnlocked {} => execute_initiate_withdraw_unlocked(deps, env, info),
     }
 }
 
-fn execute_delegate(deps: Deps, info: MessageInfo, validator: String, amount: u64) -> Result<Response<Empty>, ContractError> {
-    autorize_op(deps.storage, info.sender)?;
+fn execute_delegate(deps: Deps, info: MessageInfo, validator: String, amount: u128) -> Result<Response<Empty>, ContractError> {
+    authorize_op(deps.storage, info.sender)?;
     let denom = DENOM.load(deps.storage)?;
     let mut response = Response::new();
     response = delegate(response, validator, amount, denom);
     Ok(response)
 }
 
-fn execute_redelegate(deps: Deps, info: MessageInfo, src_validator: String, dst_validator: String, amount: u64) -> Result<Response<Empty>, ContractError> {
-    autorize_op(deps.storage, info.sender)?;
+fn execute_redelegate(deps: Deps, info: MessageInfo, src_validator: String, dst_validator: String, amount: u128) -> Result<Response<Empty>, ContractError> {
+    authorize_op(deps.storage, info.sender)?;
     let denom = DENOM.load(deps.storage)?;
     let mut response = Response::new();
     response = redelegate(response, src_validator, dst_validator, amount, denom);
     Ok(response)
 }
 
-fn execute_undelegate(deps: Deps, info: MessageInfo, validator: String, amount: u64) -> Result<Response<Empty>, ContractError> {
-    autorize_op(deps.storage, info.sender)?;
+fn execute_undelegate(deps: Deps, info: MessageInfo, validator: String, amount: u128) -> Result<Response<Empty>, ContractError> {
+    authorize_op(deps.storage, info.sender)?;
     let denom = DENOM.load(deps.storage)?;
     let mut response = Response::new();
     response = undelegate(response, validator, amount, denom);
     Ok(response)
+}
+
+fn execute_initiate_withdraw_unlocked(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response<Empty>, ContractError> {
+    authorize_op(deps.storage, info.sender)?;
+    let vested_amount = collect_vested(deps.storage, env.block.time)?;
+    distribute_vested(deps.storage, vested_amount, Response::new())
 }
 
 
@@ -320,5 +328,37 @@ mod tests {
 
         let msg = ExecuteMsg::Undelegate { validator: "val".to_string(), amount: 100 };
         execute(deps.as_mut(), mock_env(), info, msg).unwrap_err();
+    }
+
+    #[test]
+    fn initiate_withdraw_unlocked_work() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let msg = ExecuteMsg::InitiateWithdrawUnlocked {};
+        let mut env = mock_env();
+        let mut block = env.block;
+        block.time = block.time.plus_seconds(31536000);
+        env.block = block;
+        let res = execute(deps.as_mut(), env, info, msg).unwrap();
+        assert_eq!(1, res.messages.len());
+    }
+
+    #[test]
+    fn initiate_withdraw_unlocked_unauthorized() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let msg = ExecuteMsg::InitiateWithdrawUnlocked {};
+        let mut env = mock_env();
+        let mut block = env.block;
+        block.time = block.time.plus_seconds(31536000);
+        env.block = block;
+        let err = execute(deps.as_mut(), mock_env(), info, msg).unwrap_err();
+        assert_eq!(err, ContractError::Unauthorized {});
     }
 }
