@@ -37,6 +37,13 @@ pub fn withdraw_delegation_rewards(deps: Deps, response: Response, validator: St
     Ok(new_response)
 }
 
+pub fn get_all_delegated_validators(deps: Deps, env: Env) -> Result<Vec<String>, ContractError> {
+    let delegators = deps.querier.query_all_delegations(env.contract.address.to_string()).map(|delegations| -> Vec<String> {
+        vec![]
+    })?;
+    Ok(delegators)
+}
+
 pub fn get_delegation_rewards(deps: Deps, env: Env, validator: String) -> Result<u128, ContractError> {
     let delegation = deps.querier.query_delegation(env.contract.address.to_string(), validator)?;
     if delegation.is_none() {
