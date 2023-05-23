@@ -37,11 +37,12 @@ pub fn withdraw_delegation_rewards(deps: Deps, response: Response, validator: St
     Ok(new_response)
 }
 
+// the `all_delegations` endpoint do not return full delegation info (i.e. no withdrawable delegation reward)
+// so we only return validators here for subsequent logic to query full delegation info one validator at a time
 pub fn get_all_delegated_validators(deps: Deps, env: Env) -> Result<Vec<String>, ContractError> {
-    let delegators = deps.querier.query_all_delegations(env.contract.address.to_string()).map(|delegations| -> Vec<String> {
-        vec![]
-    })?;
-    Ok(delegators)
+    Ok(deps.querier.query_all_delegations(env.contract.address.to_string()).map(|delegations| -> Vec<String> {
+        delegations.iter().map(|delegation| -> String { delegation.validator.clone() }).collect()
+    })?)
 }
 
 pub fn get_delegation_rewards(deps: Deps, env: Env, validator: String) -> Result<u128, ContractError> {
