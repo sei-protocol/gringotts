@@ -1,22 +1,26 @@
-
-
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    to_binary, Binary, Deps, DepsMut, Empty, Env, MessageInfo,
-    Response, StdResult, Decimal, Addr, CosmosMsg, WasmMsg,
+    to_binary, Addr, Binary, CosmosMsg, Decimal, Deps, DepsMut, Empty, Env, MessageInfo, Response,
+    StdResult, WasmMsg,
 };
 use cw2::set_contract_version;
-use cw3::{Proposal, Status, Votes, Ballot, Vote};
+use cw3::{Ballot, Proposal, Status, Vote, Votes};
 use cw_utils::Threshold;
 
 use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::permission::{authorize_op, authorize_admin, authorize_self_call};
-use crate::staking::{delegate, redelegate, undelegate, withdraw_delegation_rewards, get_delegation_rewards, get_all_delegated_validators};
-use crate::state::{ADMINS, OPS, DENOM,
-    VESTING_TIMESTAMPS, VESTING_AMOUNTS, UNLOCK_DISTRIBUTION_ADDRESS, STAKING_REWARD_ADDRESS, MAX_VOTING_PERIOD, ADMIN_VOTING_THRESHOLD, get_number_of_admins, next_proposal_id, PROPOSALS, BALLOTS};
+use crate::permission::{authorize_admin, authorize_op, authorize_self_call};
+use crate::staking::{
+    delegate, get_all_delegated_validators, get_delegation_rewards, redelegate, undelegate,
+    withdraw_delegation_rewards,
+};
+use crate::state::{
+    get_number_of_admins, next_proposal_id, ADMINS, ADMIN_VOTING_THRESHOLD, BALLOTS, DENOM,
+    MAX_VOTING_PERIOD, OPS, PROPOSALS, STAKING_REWARD_ADDRESS, UNLOCK_DISTRIBUTION_ADDRESS,
+    VESTING_AMOUNTS, VESTING_TIMESTAMPS,
+};
 use crate::vesting::{collect_vested, distribute_vested};
 
 // version info for migration info
@@ -40,18 +44,29 @@ pub fn instantiate(
 
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     for admin in msg.admins.iter() {
-        ADMINS.save(deps.storage, admin, &EmptyStruct{})?;
+        ADMINS.save(deps.storage, admin, &EmptyStruct {})?;
     }
     for op in msg.ops.iter() {
-        OPS.save(deps.storage, op, &EmptyStruct{})?;
+        OPS.save(deps.storage, op, &EmptyStruct {})?;
     }
     DENOM.save(deps.storage, &msg.tranche.denom)?;
     VESTING_TIMESTAMPS.save(deps.storage, &msg.tranche.vesting_timestamps)?;
     VESTING_AMOUNTS.save(deps.storage, &msg.tranche.vesting_amounts)?;
-    UNLOCK_DISTRIBUTION_ADDRESS.save(deps.storage, &msg.tranche.unlocked_token_distribution_address)?;
-    STAKING_REWARD_ADDRESS.save(deps.storage, &msg.tranche.staking_reward_distribution_address)?;
+    UNLOCK_DISTRIBUTION_ADDRESS.save(
+        deps.storage,
+        &msg.tranche.unlocked_token_distribution_address,
+    )?;
+    STAKING_REWARD_ADDRESS.save(
+        deps.storage,
+        &msg.tranche.staking_reward_distribution_address,
+    )?;
     MAX_VOTING_PERIOD.save(deps.storage, &msg.max_voting_period)?;
-    ADMIN_VOTING_THRESHOLD.save(deps.storage, &Threshold::AbsolutePercentage { percentage: Decimal::percent(75) })?; // intentionally hardcoded
+    ADMIN_VOTING_THRESHOLD.save(
+        deps.storage,
+        &Threshold::AbsolutePercentage {
+            percentage: Decimal::percent(75),
+        },
+    )?; // intentionally hardcoded
     Ok(Response::default())
 }
 
@@ -63,25 +78,42 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response<Empty>, ContractError> {
     match msg {
-        ExecuteMsg::Delegate {
-            validator, amount,
-        } => execute_delegate(deps.as_ref(), info, validator, amount),
+        ExecuteMsg::Delegate { validator, amount } => {
+            execute_delegate(deps.as_ref(), info, validator, amount)
+        }
         ExecuteMsg::Redelegate {
-            src_validator, dst_validator, amount
+            src_validator,
+            dst_validator,
+            amount,
         } => execute_redelegate(deps.as_ref(), info, src_validator, dst_validator, amount),
-        ExecuteMsg::Undelegate {
-            validator, amount,
-        } => execute_undelegate(deps.as_ref(), info, validator, amount),
-        ExecuteMsg::InitiateWithdrawUnlocked {} => execute_initiate_withdraw_unlocked(deps, env, info),
-        ExecuteMsg::InitiateWithdrawReward {} => execute_initiate_withdraw_reward(deps.as_ref(), env, info),
-        ExecuteMsg::ProposeUpdateAdmins { new_admins, title, } => execute_propose_update_admin(deps, env, info, title, new_admins),
+        ExecuteMsg::Undelegate { validator, amount } => {
+            execute_undelegate(deps.as_ref(), info, validator, amount)
+        }
+        ExecuteMsg::InitiateWithdrawUnlocked {} => {
+            execute_initiate_withdraw_unlocked(deps, env, info)
+        }
+        ExecuteMsg::InitiateWithdrawReward {} => {
+            execute_initiate_withdraw_reward(deps.as_ref(), env, info)
+        }
+        ExecuteMsg::ProposeUpdateAdmins { new_admins, title } => {
+            execute_propose_update_admin(deps, env, info, title, new_admins)
+        }
         ExecuteMsg::VoteProposal { proposal_id } => execute_vote(deps, env, info, proposal_id),
-        ExecuteMsg::ProcessProposal { proposal_id } => execute_process_proposal(deps, env, info, proposal_id),
-        ExecuteMsg::InternalUpdateAdmins { new_admins } => execute_internal_update_admin(deps, env, info, new_admins),
+        ExecuteMsg::ProcessProposal { proposal_id } => {
+            execute_process_proposal(deps, env, info, proposal_id)
+        }
+        ExecuteMsg::InternalUpdateAdmins { new_admins } => {
+            execute_internal_update_admin(deps, env, info, new_admins)
+        }
     }
 }
 
-fn execute_delegate(deps: Deps, info: MessageInfo, validator: String, amount: u128) -> Result<Response<Empty>, ContractError> {
+fn execute_delegate(
+    deps: Deps,
+    info: MessageInfo,
+    validator: String,
+    amount: u128,
+) -> Result<Response<Empty>, ContractError> {
     authorize_op(deps.storage, info.sender)?;
     let denom = DENOM.load(deps.storage)?;
     let mut response = Response::new();
@@ -89,7 +121,13 @@ fn execute_delegate(deps: Deps, info: MessageInfo, validator: String, amount: u1
     Ok(response)
 }
 
-fn execute_redelegate(deps: Deps, info: MessageInfo, src_validator: String, dst_validator: String, amount: u128) -> Result<Response<Empty>, ContractError> {
+fn execute_redelegate(
+    deps: Deps,
+    info: MessageInfo,
+    src_validator: String,
+    dst_validator: String,
+    amount: u128,
+) -> Result<Response<Empty>, ContractError> {
     authorize_op(deps.storage, info.sender)?;
     let denom = DENOM.load(deps.storage)?;
     let mut response = Response::new();
@@ -97,7 +135,12 @@ fn execute_redelegate(deps: Deps, info: MessageInfo, src_validator: String, dst_
     Ok(response)
 }
 
-fn execute_undelegate(deps: Deps, info: MessageInfo, validator: String, amount: u128) -> Result<Response<Empty>, ContractError> {
+fn execute_undelegate(
+    deps: Deps,
+    info: MessageInfo,
+    validator: String,
+    amount: u128,
+) -> Result<Response<Empty>, ContractError> {
     authorize_op(deps.storage, info.sender)?;
     let denom = DENOM.load(deps.storage)?;
     let mut response = Response::new();
@@ -105,13 +148,21 @@ fn execute_undelegate(deps: Deps, info: MessageInfo, validator: String, amount: 
     Ok(response)
 }
 
-fn execute_initiate_withdraw_unlocked(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response<Empty>, ContractError> {
+fn execute_initiate_withdraw_unlocked(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+) -> Result<Response<Empty>, ContractError> {
     authorize_op(deps.storage, info.sender)?;
     let vested_amount = collect_vested(deps.storage, env.block.time)?;
     distribute_vested(deps.storage, vested_amount, Response::new())
 }
 
-fn execute_initiate_withdraw_reward(deps: Deps, env: Env, info: MessageInfo) -> Result<Response<Empty>, ContractError> {
+fn execute_initiate_withdraw_reward(
+    deps: Deps,
+    env: Env,
+    info: MessageInfo,
+) -> Result<Response<Empty>, ContractError> {
     authorize_op(deps.storage, info.sender)?;
     let mut response = Response::new();
     for validator in get_all_delegated_validators(deps, env.clone())? {
@@ -121,16 +172,36 @@ fn execute_initiate_withdraw_reward(deps: Deps, env: Env, info: MessageInfo) -> 
     Ok(response)
 }
 
-fn execute_propose_update_admin(deps: DepsMut, env: Env, info: MessageInfo, title: String, new_admins: Vec<Addr>) -> Result<Response<Empty>, ContractError> {
-    let msg = ExecuteMsg::InternalUpdateAdmins { new_admins: new_admins };
-    execute_propose(deps, env.clone(), info.clone(), title.clone(), vec![CosmosMsg::Wasm(WasmMsg::Execute {
-        contract_addr: env.contract.address.to_string(),
-        msg: to_binary(&msg)?,
-        funds: vec![],
-    })])
+fn execute_propose_update_admin(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    title: String,
+    new_admins: Vec<Addr>,
+) -> Result<Response<Empty>, ContractError> {
+    let msg = ExecuteMsg::InternalUpdateAdmins {
+        new_admins: new_admins,
+    };
+    execute_propose(
+        deps,
+        env.clone(),
+        info.clone(),
+        title.clone(),
+        vec![CosmosMsg::Wasm(WasmMsg::Execute {
+            contract_addr: env.contract.address.to_string(),
+            msg: to_binary(&msg)?,
+            funds: vec![],
+        })],
+    )
 }
 
-fn execute_propose(deps: DepsMut, env: Env, info: MessageInfo, title: String, msgs: Vec<CosmosMsg>) -> Result<Response<Empty>, ContractError> {
+fn execute_propose(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    title: String,
+    msgs: Vec<CosmosMsg>,
+) -> Result<Response<Empty>, ContractError> {
     authorize_admin(deps.storage, info.sender.clone())?;
 
     let expires = MAX_VOTING_PERIOD.load(deps.storage)?.after(&env.block);
@@ -150,7 +221,7 @@ fn execute_propose(deps: DepsMut, env: Env, info: MessageInfo, title: String, ms
     prop.update_status(&env.block);
     let id = next_proposal_id(deps.storage)?;
     PROPOSALS.save(deps.storage, id, &prop)?;
-    
+
     let ballot = Ballot {
         weight: 1,
         vote: Vote::Yes,
@@ -164,7 +235,12 @@ fn execute_propose(deps: DepsMut, env: Env, info: MessageInfo, title: String, ms
         .add_attribute("status", format!("{:?}", prop.status)))
 }
 
-fn execute_vote(deps: DepsMut, env: Env, info: MessageInfo, proposal_id: u64) -> Result<Response<Empty>, ContractError> {
+fn execute_vote(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    proposal_id: u64,
+) -> Result<Response<Empty>, ContractError> {
     authorize_admin(deps.storage, info.sender.clone())?;
 
     let mut prop = PROPOSALS.load(deps.storage, proposal_id)?;
@@ -196,7 +272,12 @@ fn execute_vote(deps: DepsMut, env: Env, info: MessageInfo, proposal_id: u64) ->
         .add_attribute("status", format!("{:?}", prop.status)))
 }
 
-fn execute_process_proposal(deps: DepsMut, env: Env, info: MessageInfo, proposal_id: u64) -> Result<Response<Empty>, ContractError> {
+fn execute_process_proposal(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    proposal_id: u64,
+) -> Result<Response<Empty>, ContractError> {
     authorize_admin(deps.storage, info.sender.clone())?;
 
     let mut prop = PROPOSALS.load(deps.storage, proposal_id)?;
@@ -219,11 +300,16 @@ fn execute_process_proposal(deps: DepsMut, env: Env, info: MessageInfo, proposal
         .add_attribute("proposal_id", proposal_id.to_string()))
 }
 
-fn execute_internal_update_admin(deps: DepsMut, env: Env, info: MessageInfo, new_admins: Vec<Addr>) -> Result<Response<Empty>, ContractError> {
+fn execute_internal_update_admin(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    new_admins: Vec<Addr>,
+) -> Result<Response<Empty>, ContractError> {
     authorize_self_call(env, info)?;
     ADMINS.clear(deps.storage);
     for admin in new_admins.iter() {
-        ADMINS.save(deps.storage, admin, &EmptyStruct{})?;
+        ADMINS.save(deps.storage, admin, &EmptyStruct {})?;
     }
     Ok(Response::new())
 }
@@ -236,12 +322,12 @@ pub fn query(_deps: Deps, _env: Env, _msg: QueryMsg) -> StdResult<Binary> {
 #[cfg(test)]
 mod tests {
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{Addr, Coin, Decimal, Validator, FullDelegation};
+    use cosmwasm_std::{Addr, Coin, Decimal, FullDelegation, Validator};
 
     use cw2::{get_contract_version, ContractVersion};
-    use cw_utils::{Duration};
+    use cw_utils::Duration;
 
-    use crate::data_structure::{Tranche};
+    use crate::data_structure::Tranche;
 
     use super::*;
 
@@ -258,10 +344,7 @@ mod tests {
 
     // this will set up the instantiation for other tests
     #[track_caller]
-    fn setup_test_case(
-        deps: DepsMut,
-        info: MessageInfo,
-    ) -> Result<Response<Empty>, ContractError> {
+    fn setup_test_case(deps: DepsMut, info: MessageInfo) -> Result<Response<Empty>, ContractError> {
         let env = mock_env();
         let mut vesting_amounts = vec![12000000u128];
         let mut vesting_timestamps = vec![env.block.time.plus_seconds(31536000)];
@@ -276,10 +359,7 @@ mod tests {
                 Addr::unchecked(VOTER3),
                 Addr::unchecked(VOTER4),
             ],
-            ops: vec![
-                Addr::unchecked(VOTER5),
-                Addr::unchecked(VOTER6),
-            ],
+            ops: vec![Addr::unchecked(VOTER5), Addr::unchecked(VOTER6)],
             tranche: Tranche {
                 denom: "usei".to_string(),
                 vesting_amounts,
@@ -302,9 +382,7 @@ mod tests {
         // No admins fails
         let instantiate_msg = InstantiateMsg {
             admins: vec![],
-            ops: vec![
-                Addr::unchecked(VOTER5),
-            ],
+            ops: vec![Addr::unchecked(VOTER5)],
             tranche: Tranche {
                 denom: "usei".to_string(),
                 vesting_amounts: vec![1],
@@ -314,20 +392,13 @@ mod tests {
             },
             max_voting_period: Duration::Time(3600),
         };
-        let err = instantiate(
-            deps.as_mut(),
-            mock_env(),
-            info.clone(),
-            instantiate_msg,
-        )
-        .unwrap_err();
+        let err =
+            instantiate(deps.as_mut(), mock_env(), info.clone(), instantiate_msg).unwrap_err();
         assert_eq!(err, ContractError::NoAdmins {});
 
         // Zero ops fails
         let instantiate_msg = InstantiateMsg {
-            admins: vec![
-                Addr::unchecked(VOTER1),
-            ],
+            admins: vec![Addr::unchecked(VOTER1)],
             ops: vec![],
             tranche: Tranche {
                 denom: "usei".to_string(),
@@ -340,19 +411,12 @@ mod tests {
         };
         let err =
             instantiate(deps.as_mut(), mock_env(), info.clone(), instantiate_msg).unwrap_err();
-        assert_eq!(
-            err,
-            ContractError::NoOps {},
-        );
+        assert_eq!(err, ContractError::NoOps {},);
 
         // Invalid vesting schedule
         let instantiate_msg = InstantiateMsg {
-            admins: vec![
-                Addr::unchecked(VOTER1),
-            ],
-            ops: vec![
-                Addr::unchecked(VOTER5),
-            ],
+            admins: vec![Addr::unchecked(VOTER1)],
+            ops: vec![Addr::unchecked(VOTER5)],
             tranche: Tranche {
                 denom: "usei".to_string(),
                 vesting_amounts: vec![],
@@ -397,7 +461,10 @@ mod tests {
         let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
-        let msg = ExecuteMsg::Delegate { validator: "val".to_string(), amount: 100 };
+        let msg = ExecuteMsg::Delegate {
+            validator: "val".to_string(),
+            amount: 100,
+        };
         let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
         assert_eq!(1, res.messages.len());
     }
@@ -409,7 +476,10 @@ mod tests {
         let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
-        let msg = ExecuteMsg::Delegate { validator: "val".to_string(), amount: 100 };
+        let msg = ExecuteMsg::Delegate {
+            validator: "val".to_string(),
+            amount: 100,
+        };
         execute(deps.as_mut(), mock_env(), info, msg).unwrap_err();
     }
 
@@ -420,7 +490,11 @@ mod tests {
         let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
-        let msg = ExecuteMsg::Redelegate { src_validator: "val1".to_string(), dst_validator: "val2".to_string(), amount: 100 };
+        let msg = ExecuteMsg::Redelegate {
+            src_validator: "val1".to_string(),
+            dst_validator: "val2".to_string(),
+            amount: 100,
+        };
         let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
         assert_eq!(1, res.messages.len());
     }
@@ -432,7 +506,11 @@ mod tests {
         let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
-        let msg = ExecuteMsg::Redelegate { src_validator: "val1".to_string(), dst_validator: "val2".to_string(), amount: 100 };
+        let msg = ExecuteMsg::Redelegate {
+            src_validator: "val1".to_string(),
+            dst_validator: "val2".to_string(),
+            amount: 100,
+        };
         execute(deps.as_mut(), mock_env(), info, msg).unwrap_err();
     }
 
@@ -443,7 +521,10 @@ mod tests {
         let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
-        let msg = ExecuteMsg::Undelegate { validator: "val".to_string(), amount: 100 };
+        let msg = ExecuteMsg::Undelegate {
+            validator: "val".to_string(),
+            amount: 100,
+        };
         let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
         assert_eq!(1, res.messages.len());
     }
@@ -455,7 +536,10 @@ mod tests {
         let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
-        let msg = ExecuteMsg::Undelegate { validator: "val".to_string(), amount: 100 };
+        let msg = ExecuteMsg::Undelegate {
+            validator: "val".to_string(),
+            amount: 100,
+        };
         execute(deps.as_mut(), mock_env(), info, msg).unwrap_err();
     }
 
@@ -496,29 +580,39 @@ mod tests {
         let validator1 = "val1";
         let validator2 = "val2";
         let mut deps = mock_dependencies();
-        deps.querier.update_staking("usei", &[Validator{
-            address: validator1.to_string(),
-            commission: Decimal::zero(),
-            max_commission: Decimal::zero(),
-            max_change_rate: Decimal::zero(),
-        }, Validator{
-            address: validator2.to_string(),
-            commission: Decimal::zero(),
-            max_commission: Decimal::zero(),
-            max_change_rate: Decimal::zero(),
-        }], &[FullDelegation{
-            delegator: Addr::unchecked(mock_env().contract.address),
-            validator: validator1.to_string(),
-            amount: Coin::new(1000000, "usei"),
-            can_redelegate: Coin::new(0, "usei"),
-            accumulated_rewards: vec![Coin::new(10, "usei"), Coin::new(20, "usei")],
-        }, FullDelegation{
-            delegator: Addr::unchecked(mock_env().contract.address),
-            validator: validator2.to_string(),
-            amount: Coin::new(500000, "usei"),
-            can_redelegate: Coin::new(0, "usei"),
-            accumulated_rewards: vec![Coin::new(5, "usei")],
-        }]);
+        deps.querier.update_staking(
+            "usei",
+            &[
+                Validator {
+                    address: validator1.to_string(),
+                    commission: Decimal::zero(),
+                    max_commission: Decimal::zero(),
+                    max_change_rate: Decimal::zero(),
+                },
+                Validator {
+                    address: validator2.to_string(),
+                    commission: Decimal::zero(),
+                    max_commission: Decimal::zero(),
+                    max_change_rate: Decimal::zero(),
+                },
+            ],
+            &[
+                FullDelegation {
+                    delegator: Addr::unchecked(mock_env().contract.address),
+                    validator: validator1.to_string(),
+                    amount: Coin::new(1000000, "usei"),
+                    can_redelegate: Coin::new(0, "usei"),
+                    accumulated_rewards: vec![Coin::new(10, "usei"), Coin::new(20, "usei")],
+                },
+                FullDelegation {
+                    delegator: Addr::unchecked(mock_env().contract.address),
+                    validator: validator2.to_string(),
+                    amount: Coin::new(500000, "usei"),
+                    can_redelegate: Coin::new(0, "usei"),
+                    accumulated_rewards: vec![Coin::new(5, "usei")],
+                },
+            ],
+        );
 
         let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
@@ -726,8 +820,12 @@ mod tests {
             new_admins: vec![Addr::unchecked("new_admin1"), Addr::unchecked("new_admin2")],
         };
         execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
-        ADMINS.load(deps.as_ref().storage, &Addr::unchecked("new_admin1")).unwrap();
-        ADMINS.load(deps.as_ref().storage, &Addr::unchecked("new_admin2")).unwrap();
+        ADMINS
+            .load(deps.as_ref().storage, &Addr::unchecked("new_admin1"))
+            .unwrap();
+        ADMINS
+            .load(deps.as_ref().storage, &Addr::unchecked("new_admin2"))
+            .unwrap();
         assert_eq!(2, get_number_of_admins(deps.as_ref().storage));
     }
 
@@ -744,8 +842,12 @@ mod tests {
         };
         let err = execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap_err();
         assert_eq!(err, ContractError::Unauthorized {});
-        ADMINS.load(deps.as_ref().storage, &Addr::unchecked("new_admin1")).unwrap_err();
-        ADMINS.load(deps.as_ref().storage, &Addr::unchecked("new_admin2")).unwrap_err();
+        ADMINS
+            .load(deps.as_ref().storage, &Addr::unchecked("new_admin1"))
+            .unwrap_err();
+        ADMINS
+            .load(deps.as_ref().storage, &Addr::unchecked("new_admin2"))
+            .unwrap_err();
         assert_eq!(4, get_number_of_admins(deps.as_ref().storage));
     }
 }

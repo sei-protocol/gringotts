@@ -1,6 +1,9 @@
-use cosmwasm_std::{Storage, Timestamp, Response, BankMsg, coins};
+use cosmwasm_std::{coins, BankMsg, Response, Storage, Timestamp};
 
-use crate::{ContractError, state::{VESTING_TIMESTAMPS, VESTING_AMOUNTS, UNLOCK_DISTRIBUTION_ADDRESS, DENOM}};
+use crate::{
+    state::{DENOM, UNLOCK_DISTRIBUTION_ADDRESS, VESTING_AMOUNTS, VESTING_TIMESTAMPS},
+    ContractError,
+};
 
 pub fn collect_vested(storage: &mut dyn Storage, now: Timestamp) -> Result<u128, ContractError> {
     let vesting_ts = VESTING_TIMESTAMPS.load(storage)?;
@@ -27,22 +30,29 @@ pub fn collect_vested(storage: &mut dyn Storage, now: Timestamp) -> Result<u128,
     Ok(total_vested_amount)
 }
 
-pub fn distribute_vested(storage: &dyn Storage, amount: u128, response: Response) -> Result<Response, ContractError> {
+pub fn distribute_vested(
+    storage: &dyn Storage,
+    amount: u128,
+    response: Response,
+) -> Result<Response, ContractError> {
     if amount == 0 {
         return Ok(response);
     }
     let addr = UNLOCK_DISTRIBUTION_ADDRESS.load(storage)?;
     let denom = DENOM.load(storage)?;
-    let msg = BankMsg::Send { to_address: addr.to_string(), amount: coins(amount, denom) };
+    let msg = BankMsg::Send {
+        to_address: addr.to_string(),
+        amount: coins(amount, denom),
+    };
     Ok(response.add_message(msg))
 }
 
 #[cfg(test)]
 mod tests {
-    use cosmwasm_std::{Response, Addr};
     use cosmwasm_std::testing::{mock_dependencies, mock_env};
+    use cosmwasm_std::{Addr, Response};
 
-    use crate::state::{VESTING_TIMESTAMPS, VESTING_AMOUNTS, DENOM, UNLOCK_DISTRIBUTION_ADDRESS};
+    use crate::state::{DENOM, UNLOCK_DISTRIBUTION_ADDRESS, VESTING_AMOUNTS, VESTING_TIMESTAMPS};
 
     use super::{collect_vested, distribute_vested};
 
@@ -62,7 +72,9 @@ mod tests {
         let mut deps = mock_dependencies();
         let deps_mut = deps.as_mut();
         let now = mock_env().block.time;
-        VESTING_TIMESTAMPS.save(deps_mut.storage, &vec![now]).unwrap();
+        VESTING_TIMESTAMPS
+            .save(deps_mut.storage, &vec![now])
+            .unwrap();
         VESTING_AMOUNTS.save(deps_mut.storage, &vec![10]).unwrap();
 
         assert_eq!(10, collect_vested(deps_mut.storage, now).unwrap());
@@ -75,11 +87,16 @@ mod tests {
         let mut deps = mock_dependencies();
         let deps_mut = deps.as_mut();
         let now = mock_env().block.time;
-        VESTING_TIMESTAMPS.save(deps_mut.storage, &vec![now.plus_seconds(1)]).unwrap();
+        VESTING_TIMESTAMPS
+            .save(deps_mut.storage, &vec![now.plus_seconds(1)])
+            .unwrap();
         VESTING_AMOUNTS.save(deps_mut.storage, &vec![10]).unwrap();
 
         assert_eq!(0, collect_vested(deps_mut.storage, now).unwrap());
-        assert_eq!(VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(), vec![now.plus_seconds(1)]);
+        assert_eq!(
+            VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(),
+            vec![now.plus_seconds(1)]
+        );
         assert_eq!(VESTING_AMOUNTS.load(deps_mut.storage).unwrap(), vec![10]);
     }
 
@@ -88,12 +105,25 @@ mod tests {
         let mut deps = mock_dependencies();
         let deps_mut = deps.as_mut();
         let now = mock_env().block.time;
-        VESTING_TIMESTAMPS.save(deps_mut.storage, &vec![now.minus_seconds(1), now, now.plus_seconds(1)]).unwrap();
-        VESTING_AMOUNTS.save(deps_mut.storage, &vec![10, 9, 11]).unwrap();
+        VESTING_TIMESTAMPS
+            .save(
+                deps_mut.storage,
+                &vec![now.minus_seconds(1), now, now.plus_seconds(1)],
+            )
+            .unwrap();
+        VESTING_AMOUNTS
+            .save(deps_mut.storage, &vec![10, 9, 11])
+            .unwrap();
 
         assert_eq!(19, collect_vested(deps_mut.storage, now).unwrap());
-        assert_eq!(VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(), vec![now.plus_seconds(1)]);
-        assert_eq!(VESTING_AMOUNTS.load(deps_mut.storage).unwrap(), vec![11u128]);
+        assert_eq!(
+            VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(),
+            vec![now.plus_seconds(1)]
+        );
+        assert_eq!(
+            VESTING_AMOUNTS.load(deps_mut.storage).unwrap(),
+            vec![11u128]
+        );
     }
 
     #[test]
@@ -101,8 +131,15 @@ mod tests {
         let mut deps = mock_dependencies();
         let deps_mut = deps.as_mut();
         let now = mock_env().block.time;
-        VESTING_TIMESTAMPS.save(deps_mut.storage, &vec![now.minus_seconds(2), now.minus_seconds(1), now]).unwrap();
-        VESTING_AMOUNTS.save(deps_mut.storage, &vec![10, 9, 11]).unwrap();
+        VESTING_TIMESTAMPS
+            .save(
+                deps_mut.storage,
+                &vec![now.minus_seconds(2), now.minus_seconds(1), now],
+            )
+            .unwrap();
+        VESTING_AMOUNTS
+            .save(deps_mut.storage, &vec![10, 9, 11])
+            .unwrap();
 
         assert_eq!(30, collect_vested(deps_mut.storage, now).unwrap());
         assert_eq!(VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(), vec![]);
@@ -114,12 +151,33 @@ mod tests {
         let mut deps = mock_dependencies();
         let deps_mut = deps.as_mut();
         let now = mock_env().block.time;
-        VESTING_TIMESTAMPS.save(deps_mut.storage, &vec![now.plus_seconds(1), now.plus_seconds(2), now.plus_seconds(3)]).unwrap();
-        VESTING_AMOUNTS.save(deps_mut.storage, &vec![10, 9, 11]).unwrap();
+        VESTING_TIMESTAMPS
+            .save(
+                deps_mut.storage,
+                &vec![
+                    now.plus_seconds(1),
+                    now.plus_seconds(2),
+                    now.plus_seconds(3),
+                ],
+            )
+            .unwrap();
+        VESTING_AMOUNTS
+            .save(deps_mut.storage, &vec![10, 9, 11])
+            .unwrap();
 
         assert_eq!(0, collect_vested(deps_mut.storage, now).unwrap());
-        assert_eq!(VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(), vec![now.plus_seconds(1), now.plus_seconds(2), now.plus_seconds(3)]);
-        assert_eq!(VESTING_AMOUNTS.load(deps_mut.storage).unwrap(), vec![10, 9, 11]);
+        assert_eq!(
+            VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(),
+            vec![
+                now.plus_seconds(1),
+                now.plus_seconds(2),
+                now.plus_seconds(3)
+            ]
+        );
+        assert_eq!(
+            VESTING_AMOUNTS.load(deps_mut.storage).unwrap(),
+            vec![10, 9, 11]
+        );
     }
 
     #[test]
@@ -137,7 +195,9 @@ mod tests {
         let deps_mut = deps.as_mut();
         let mut response = Response::new();
         DENOM.save(deps_mut.storage, &"usei".to_string()).unwrap();
-        UNLOCK_DISTRIBUTION_ADDRESS.save(deps_mut.storage, &Addr::unchecked("unlock_address")).unwrap();
+        UNLOCK_DISTRIBUTION_ADDRESS
+            .save(deps_mut.storage, &Addr::unchecked("unlock_address"))
+            .unwrap();
         response = distribute_vested(deps_mut.storage, 20, response).unwrap();
         assert_eq!(response.messages.len(), 1);
     }

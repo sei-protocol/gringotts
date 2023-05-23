@@ -1,5 +1,5 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{Addr};
+use cosmwasm_std::Addr;
 use cw_utils::Duration;
 
 use crate::data_structure::Tranche;
@@ -33,12 +33,17 @@ pub enum ExecuteMsg {
         title: String,
         new_admins: Vec<Addr>,
     },
-    VoteProposal { proposal_id: u64 },
-    ProcessProposal { proposal_id: u64 },
-    InternalUpdateAdmins { new_admins: Vec<Addr> },
+    VoteProposal {
+        proposal_id: u64,
+    },
+    ProcessProposal {
+        proposal_id: u64,
+    },
+    InternalUpdateAdmins {
+        new_admins: Vec<Addr>,
+    },
 }
 
 #[cw_serde]
 #[derive(QueryResponses)]
-pub enum QueryMsg {
-}
+pub enum QueryMsg {}

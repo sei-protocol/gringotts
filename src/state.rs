@@ -1,9 +1,9 @@
-use cosmwasm_std::{Addr, Timestamp, Storage, StdResult};
+use cosmwasm_std::{Addr, StdResult, Storage, Timestamp};
 use cw3::{Ballot, Proposal};
 use cw_storage_plus::{Item, Map};
 use cw_utils::{Duration, Threshold};
 
-use crate::data_structure::{EmptyStruct};
+use crate::data_structure::EmptyStruct;
 
 pub const DENOM: Item<String> = Item::new("denom");
 pub const VESTING_TIMESTAMPS: Item<Vec<Timestamp>> = Item::new("ts");
@@ -16,7 +16,14 @@ pub const ADMINS: Map<&Addr, EmptyStruct> = Map::new("admins");
 pub const OPS: Map<&Addr, EmptyStruct> = Map::new("ops");
 
 pub fn get_number_of_admins(store: &dyn Storage) -> usize {
-    ADMINS.keys(store, Option::None, Option::None, cosmwasm_std::Order::Ascending).count()
+    ADMINS
+        .keys(
+            store,
+            Option::None,
+            Option::None,
+            cosmwasm_std::Order::Ascending,
+        )
+        .count()
 }
 
 // ADMIN STATES
