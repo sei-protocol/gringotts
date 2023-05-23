@@ -12,7 +12,7 @@ use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::permission::authorize_op;
-use crate::staking::{delegate, redelegate, undelegate};
+use crate::staking::{delegate, redelegate, undelegate, withdraw_delegation_rewards, get_delegation_rewards, get_all_delegated_validators};
 use crate::state::{ADMINS, OPS, DENOM,
     VESTING_TIMESTAMPS, VESTING_AMOUNTS, UNLOCK_DISTRIBUTION_ADDRESS, STAKING_REWARD_ADDRESS};
 use crate::vesting::{collect_vested, distribute_vested};
@@ -69,6 +69,7 @@ pub fn execute(
             validator, amount,
         } => execute_undelegate(deps.as_ref(), info, validator, amount),
         ExecuteMsg::InitiateWithdrawUnlocked {} => execute_initiate_withdraw_unlocked(deps, env, info),
+        ExecuteMsg::InitiateWithdrawReward {} => execute_initiate_withdraw_reward(deps.as_ref(), env, info),
     }
 }
 
@@ -102,6 +103,15 @@ fn execute_initiate_withdraw_unlocked(deps: DepsMut, env: Env, info: MessageInfo
     distribute_vested(deps.storage, vested_amount, Response::new())
 }
 
+fn execute_initiate_withdraw_reward(deps: Deps, env: Env, info: MessageInfo) -> Result<Response<Empty>, ContractError> {
+    authorize_op(deps.storage, info.sender)?;
+    let mut response = Response::new();
+    for validator in get_all_delegated_validators(deps, env.clone())? {
+        let withdrawable_amount = get_delegation_rewards(deps, env.clone(), validator.clone())?;
+        response = withdraw_delegation_rewards(deps, response, validator, withdrawable_amount)?;
+    }
+    Ok(response)
+}
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(_deps: Deps, _env: Env, _msg: QueryMsg) -> StdResult<Binary> {
@@ -111,7 +121,7 @@ pub fn query(_deps: Deps, _env: Env, _msg: QueryMsg) -> StdResult<Binary> {
 #[cfg(test)]
 mod tests {
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{Addr, Coin};
+    use cosmwasm_std::{Addr, Coin, Decimal, Validator, FullDelegation};
 
     use cw2::{get_contract_version, ContractVersion};
     use cw_utils::{Duration};
@@ -360,5 +370,53 @@ mod tests {
         env.block = block;
         let err = execute(deps.as_mut(), mock_env(), info, msg).unwrap_err();
         assert_eq!(err, ContractError::Unauthorized {});
+    }
+
+    #[test]
+    fn initiate_withdraw_reward_work() {
+        let validator1 = "val1";
+        let validator2 = "val2";
+        let mut deps = mock_dependencies();
+        deps.querier.update_staking("usei", &[Validator{
+            address: validator1.to_string(),
+            commission: Decimal::zero(),
+            max_commission: Decimal::zero(),
+            max_change_rate: Decimal::zero(),
+        }, Validator{
+            address: validator2.to_string(),
+            commission: Decimal::zero(),
+            max_commission: Decimal::zero(),
+            max_change_rate: Decimal::zero(),
+        }], &[FullDelegation{
+            delegator: Addr::unchecked(mock_env().contract.address),
+            validator: validator1.to_string(),
+            amount: Coin::new(1000000, "usei"),
+            can_redelegate: Coin::new(0, "usei"),
+            accumulated_rewards: vec![Coin::new(10, "usei"), Coin::new(20, "usei")],
+        }, FullDelegation{
+            delegator: Addr::unchecked(mock_env().contract.address),
+            validator: validator2.to_string(),
+            amount: Coin::new(500000, "usei"),
+            can_redelegate: Coin::new(0, "usei"),
+            accumulated_rewards: vec![Coin::new(5, "usei")],
+        }]);
+
+        let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let msg = ExecuteMsg::InitiateWithdrawReward {};
+        let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+        assert_eq!(4, res.messages.len());
+    }
+
+    #[test]
+    fn initiate_withdraw_reward_unauthorized() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let msg = ExecuteMsg::InitiateWithdrawReward {};
+        execute(deps.as_mut(), mock_env(), info, msg).unwrap_err();
     }
 }

@@ -1,4 +1,4 @@
-use cosmwasm_std::{Storage, Timestamp, Response, BankMsg, Coin};
+use cosmwasm_std::{Storage, Timestamp, Response, BankMsg, coins};
 
 use crate::{ContractError, state::{VESTING_TIMESTAMPS, VESTING_AMOUNTS, UNLOCK_DISTRIBUTION_ADDRESS, DENOM}};
 
@@ -33,7 +33,7 @@ pub fn distribute_vested(storage: &dyn Storage, amount: u128, response: Response
     }
     let addr = UNLOCK_DISTRIBUTION_ADDRESS.load(storage)?;
     let denom = DENOM.load(storage)?;
-    let msg = BankMsg::Send { to_address: addr.to_string(), amount: vec![Coin::new(amount, denom)] };
+    let msg = BankMsg::Send { to_address: addr.to_string(), amount: coins(amount, denom) };
     Ok(response.add_message(msg))
 }
 

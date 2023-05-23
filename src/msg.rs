@@ -26,6 +26,7 @@ pub enum ExecuteMsg {
         amount: u128,
     },
     InitiateWithdrawUnlocked {},
+    InitiateWithdrawReward {},
 }
 
 #[cw_serde]
