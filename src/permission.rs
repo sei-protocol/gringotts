@@ -1,4 +1,4 @@
-use cosmwasm_std::{Storage, Addr};
+use cosmwasm_std::{Storage, Addr, Env, MessageInfo};
 
 use crate::{ContractError, state::{OPS, ADMINS}};
 
@@ -14,6 +14,13 @@ pub fn authorize_admin(store: &dyn Storage, caller: Addr) -> Result<(), Contract
         Ok(_) => Ok(()),
         Err(_) => Err(ContractError::Unauthorized {})
     }
+}
+
+pub fn authorize_self_call(env: Env, info: MessageInfo) -> Result<(), ContractError> {
+    if env.contract.address != info.sender {
+        return Err(ContractError::Unauthorized {})
+    }
+    Ok(())
 }
 
 #[cfg(test)]

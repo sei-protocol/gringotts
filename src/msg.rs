@@ -1,5 +1,6 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{Addr};
+use cw_utils::Duration;
 
 use crate::data_structure::Tranche;
 
@@ -8,6 +9,7 @@ pub struct InstantiateMsg {
     pub admins: Vec<Addr>,
     pub ops: Vec<Addr>,
     pub tranche: Tranche,
+    pub max_voting_period: Duration,
 }
 
 #[cw_serde]
@@ -27,6 +29,13 @@ pub enum ExecuteMsg {
     },
     InitiateWithdrawUnlocked {},
     InitiateWithdrawReward {},
+    ProposeUpdateAdmins {
+        title: String,
+        new_admins: Vec<Addr>,
+    },
+    VoteProposal { proposal_id: u64 },
+    ProcessProposal { proposal_id: u64 },
+    InternalUpdateAdmins { new_admins: Vec<Addr> },
 }
 
 #[cw_serde]
