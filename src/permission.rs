@@ -28,6 +28,7 @@ pub fn authorize_self_call(env: Env, info: MessageInfo) -> Result<(), ContractEr
 
 #[cfg(test)]
 mod tests {
+    use cosmwasm_std::testing::{mock_env, mock_info};
     use cosmwasm_std::{testing::mock_dependencies, Addr};
 
     use super::*;
@@ -65,5 +66,15 @@ mod tests {
 
         authorize_admin(deps.as_ref().storage, Addr::unchecked(GOOD_ADMIN)).unwrap();
         authorize_admin(deps.as_ref().storage, Addr::unchecked(BAD_ADMIN)).unwrap_err();
+    }
+
+    #[test]
+    fn test_authorize_self_call() {
+        let env = mock_env();
+        let info1 = mock_info(&env.contract.address.to_string(), &[]);
+        let info2 = mock_info("someone", &[]);
+
+        authorize_self_call(env.clone(), info1).unwrap();
+        authorize_self_call(env.clone(), info2).unwrap_err();
     }
 }

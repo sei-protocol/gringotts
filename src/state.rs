@@ -41,3 +41,36 @@ pub fn next_proposal_id(store: &mut dyn Storage) -> StdResult<u64> {
     PROPOSAL_COUNT.save(store, &id)?;
     Ok(id)
 }
+
+#[cfg(test)]
+mod tests {
+    use cosmwasm_std::{testing::mock_dependencies, Addr};
+
+    use crate::{
+        data_structure::EmptyStruct,
+        state::{get_number_of_admins, ADMINS},
+    };
+
+    #[test]
+    fn test_get_number_of_admins() {
+        let mut deps = mock_dependencies();
+        assert_eq!(0, get_number_of_admins(deps.as_ref().storage));
+
+        ADMINS
+            .save(
+                deps.as_mut().storage,
+                &Addr::unchecked("admin"),
+                &EmptyStruct {},
+            )
+            .unwrap();
+        assert_eq!(1, get_number_of_admins(deps.as_ref().storage));
+        ADMINS
+            .save(
+                deps.as_mut().storage,
+                &Addr::unchecked("admin2"),
+                &EmptyStruct {},
+            )
+            .unwrap();
+        assert_eq!(2, get_number_of_admins(deps.as_ref().storage));
+    }
+}

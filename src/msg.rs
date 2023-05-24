@@ -10,6 +10,7 @@ pub struct InstantiateMsg {
     pub ops: Vec<Addr>,
     pub tranche: Tranche,
     pub max_voting_period: Duration,
+    pub admin_voting_threshold_percentage: u8,
 }
 
 #[cw_serde]
@@ -29,9 +30,9 @@ pub enum ExecuteMsg {
     },
     InitiateWithdrawUnlocked {},
     InitiateWithdrawReward {},
-    ProposeUpdateAdmins {
-        title: String,
-        new_admins: Vec<Addr>,
+    ProposeUpdateAdmin {
+        admin: Addr,
+        remove: bool,
     },
     VoteProposal {
         proposal_id: u64,
@@ -39,8 +40,9 @@ pub enum ExecuteMsg {
     ProcessProposal {
         proposal_id: u64,
     },
-    InternalUpdateAdmins {
-        new_admins: Vec<Addr>,
+    InternalUpdateAdmin {
+        admin: Addr,
+        remove: bool,
     },
 }
 

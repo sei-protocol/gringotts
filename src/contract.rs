@@ -6,7 +6,7 @@ use cosmwasm_std::{
 };
 use cw2::set_contract_version;
 use cw3::{Ballot, Proposal, Status, Vote, Votes};
-use cw_utils::Threshold;
+use cw_utils::{Threshold, ThresholdError};
 
 use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
@@ -40,6 +40,11 @@ pub fn instantiate(
     if msg.ops.is_empty() {
         return Err(ContractError::NoOps {});
     }
+    if msg.admin_voting_threshold_percentage > 100 {
+        return Err(ContractError::Threshold(
+            ThresholdError::InvalidThreshold {},
+        ));
+    }
     msg.tranche.validate(info.funds)?;
 
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
@@ -64,7 +69,7 @@ pub fn instantiate(
     ADMIN_VOTING_THRESHOLD.save(
         deps.storage,
         &Threshold::AbsolutePercentage {
-            percentage: Decimal::percent(75),
+            percentage: Decimal::percent(msg.admin_voting_threshold_percentage as u64),
         },
     )?; // intentionally hardcoded
     Ok(Response::default())
@@ -95,15 +100,15 @@ pub fn execute(
         ExecuteMsg::InitiateWithdrawReward {} => {
             execute_initiate_withdraw_reward(deps.as_ref(), env, info)
         }
-        ExecuteMsg::ProposeUpdateAdmins { new_admins, title } => {
-            execute_propose_update_admin(deps, env, info, title, new_admins)
+        ExecuteMsg::ProposeUpdateAdmin { admin, remove } => {
+            execute_propose_update_admin(deps, env, info, admin, remove)
         }
         ExecuteMsg::VoteProposal { proposal_id } => execute_vote(deps, env, info, proposal_id),
         ExecuteMsg::ProcessProposal { proposal_id } => {
             execute_process_proposal(deps, env, info, proposal_id)
         }
-        ExecuteMsg::InternalUpdateAdmins { new_admins } => {
-            execute_internal_update_admin(deps, env, info, new_admins)
+        ExecuteMsg::InternalUpdateAdmin { admin, remove } => {
+            execute_internal_update_admin(deps, env, info, admin, remove)
         }
     }
 }
@@ -176,12 +181,19 @@ fn execute_propose_update_admin(
     deps: DepsMut,
     env: Env,
     info: MessageInfo,
-    title: String,
-    new_admins: Vec<Addr>,
+    admin: Addr,
+    remove: bool,
 ) -> Result<Response<Empty>, ContractError> {
-    let msg = ExecuteMsg::InternalUpdateAdmins {
-        new_admins: new_admins,
+    let msg = ExecuteMsg::InternalUpdateAdmin {
+        admin: admin.clone(),
+        remove: remove,
     };
+    let title: String;
+    if remove {
+        title = format!("remove {}", admin.to_string());
+    } else {
+        title = format!("add {}", admin.to_string());
+    }
     execute_propose(
         deps,
         env.clone(),
@@ -304,12 +316,14 @@ fn execute_internal_update_admin(
     deps: DepsMut,
     env: Env,
     info: MessageInfo,
-    new_admins: Vec<Addr>,
+    admin: Addr,
+    remove: bool,
 ) -> Result<Response<Empty>, ContractError> {
     authorize_self_call(env, info)?;
-    ADMINS.clear(deps.storage);
-    for admin in new_admins.iter() {
-        ADMINS.save(deps.storage, admin, &EmptyStruct {})?;
+    if remove {
+        ADMINS.remove(deps.storage, &admin);
+    } else {
+        ADMINS.save(deps.storage, &admin, &EmptyStruct {})?;
     }
     Ok(Response::new())
 }
@@ -368,6 +382,7 @@ mod tests {
                 staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
             },
             max_voting_period: Duration::Time(3600),
+            admin_voting_threshold_percentage: 75,
         };
         instantiate(deps, mock_env(), info, instantiate_msg)
     }
@@ -391,6 +406,7 @@ mod tests {
                 staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
             },
             max_voting_period: Duration::Time(3600),
+            admin_voting_threshold_percentage: 75,
         };
         let err =
             instantiate(deps.as_mut(), mock_env(), info.clone(), instantiate_msg).unwrap_err();
@@ -408,6 +424,7 @@ mod tests {
                 staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
             },
             max_voting_period: Duration::Time(3600),
+            admin_voting_threshold_percentage: 75,
         };
         let err =
             instantiate(deps.as_mut(), mock_env(), info.clone(), instantiate_msg).unwrap_err();
@@ -425,6 +442,7 @@ mod tests {
                 staking_reward_distribution_address: Addr::unchecked(REWARD_ADDR1),
             },
             max_voting_period: Duration::Time(3600),
+            admin_voting_threshold_percentage: 75,
         };
         let err =
             instantiate(deps.as_mut(), mock_env(), info.clone(), instantiate_msg).unwrap_err();
@@ -641,9 +659,9 @@ mod tests {
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let info = mock_info(VOTER1, &[]);
-        let proposal = ExecuteMsg::ProposeUpdateAdmins {
-            title: "update admin".to_string(),
-            new_admins: vec![Addr::unchecked("new_admin1"), Addr::unchecked("new_admin2")],
+        let proposal = ExecuteMsg::ProposeUpdateAdmin {
+            admin: Addr::unchecked("new_admin1"),
+            remove: false,
         };
         let res = execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
 
@@ -666,9 +684,9 @@ mod tests {
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let info = mock_info(OWNER, &[]);
-        let proposal = ExecuteMsg::ProposeUpdateAdmins {
-            title: "update admin".to_string(),
-            new_admins: vec![Addr::unchecked("new_admin1"), Addr::unchecked("new_admin2")],
+        let proposal = ExecuteMsg::ProposeUpdateAdmin {
+            admin: Addr::unchecked("new_admin1"),
+            remove: false,
         };
         let err = execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap_err();
         assert_eq!(err, ContractError::Unauthorized {});
@@ -682,9 +700,9 @@ mod tests {
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let info = mock_info(VOTER1, &[]);
-        let proposal = ExecuteMsg::ProposeUpdateAdmins {
-            title: "update admin".to_string(),
-            new_admins: vec![Addr::unchecked("new_admin1"), Addr::unchecked("new_admin2")],
+        let proposal = ExecuteMsg::ProposeUpdateAdmin {
+            admin: Addr::unchecked("new_admin1"),
+            remove: false,
         };
         execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
 
@@ -705,9 +723,9 @@ mod tests {
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let info = mock_info(VOTER1, &[]);
-        let proposal = ExecuteMsg::ProposeUpdateAdmins {
-            title: "update admin".to_string(),
-            new_admins: vec![Addr::unchecked("new_admin1"), Addr::unchecked("new_admin2")],
+        let proposal = ExecuteMsg::ProposeUpdateAdmin {
+            admin: Addr::unchecked("new_admin1"),
+            remove: false,
         };
         execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
 
@@ -731,9 +749,9 @@ mod tests {
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let info = mock_info(VOTER1, &[]);
-        let proposal = ExecuteMsg::ProposeUpdateAdmins {
-            title: "update admin".to_string(),
-            new_admins: vec![Addr::unchecked("new_admin1"), Addr::unchecked("new_admin2")],
+        let proposal = ExecuteMsg::ProposeUpdateAdmin {
+            admin: Addr::unchecked("new_admin1"),
+            remove: false,
         };
         execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
 
@@ -760,9 +778,9 @@ mod tests {
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let info = mock_info(VOTER1, &[]);
-        let proposal = ExecuteMsg::ProposeUpdateAdmins {
-            title: "update admin".to_string(),
-            new_admins: vec![Addr::unchecked("new_admin1"), Addr::unchecked("new_admin2")],
+        let proposal = ExecuteMsg::ProposeUpdateAdmin {
+            admin: Addr::unchecked("new_admin1"),
+            remove: false,
         };
         execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
 
@@ -785,9 +803,9 @@ mod tests {
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let info = mock_info(VOTER1, &[]);
-        let proposal = ExecuteMsg::ProposeUpdateAdmins {
-            title: "update admin".to_string(),
-            new_admins: vec![Addr::unchecked("new_admin1"), Addr::unchecked("new_admin2")],
+        let proposal = ExecuteMsg::ProposeUpdateAdmin {
+            admin: Addr::unchecked("new_admin1"),
+            remove: false,
         };
         execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
 
@@ -816,17 +834,34 @@ mod tests {
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let info = mock_info(mock_env().contract.address.as_str(), &[]);
-        let proposal = ExecuteMsg::InternalUpdateAdmins {
-            new_admins: vec![Addr::unchecked("new_admin1"), Addr::unchecked("new_admin2")],
+        let proposal = ExecuteMsg::InternalUpdateAdmin {
+            admin: Addr::unchecked("new_admin1"),
+            remove: false,
         };
         execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
         ADMINS
             .load(deps.as_ref().storage, &Addr::unchecked("new_admin1"))
             .unwrap();
+        assert_eq!(5, get_number_of_admins(deps.as_ref().storage));
+    }
+
+    #[test]
+    fn test_execute_internal_update_admin_remove_works() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let info = mock_info(mock_env().contract.address.as_str(), &[]);
+        let proposal = ExecuteMsg::InternalUpdateAdmin {
+            admin: Addr::unchecked(VOTER1),
+            remove: true,
+        };
+        execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
         ADMINS
-            .load(deps.as_ref().storage, &Addr::unchecked("new_admin2"))
-            .unwrap();
-        assert_eq!(2, get_number_of_admins(deps.as_ref().storage));
+            .load(deps.as_ref().storage, &Addr::unchecked(VOTER1))
+            .unwrap_err();
+        assert_eq!(3, get_number_of_admins(deps.as_ref().storage));
     }
 
     #[test]
@@ -837,8 +872,9 @@ mod tests {
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let info = mock_info(VOTER1, &[]);
-        let proposal = ExecuteMsg::InternalUpdateAdmins {
-            new_admins: vec![Addr::unchecked("new_admin1"), Addr::unchecked("new_admin2")],
+        let proposal = ExecuteMsg::InternalUpdateAdmin {
+            admin: Addr::unchecked("new_admin1"),
+            remove: false,
         };
         let err = execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap_err();
         assert_eq!(err, ContractError::Unauthorized {});
