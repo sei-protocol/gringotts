@@ -1,6 +1,9 @@
-use cosmwasm_std::{StakingMsg, Response, Coin, Deps, Env, DistributionMsg, BankMsg, coins};
+use cosmwasm_std::{coins, BankMsg, Coin, Deps, DistributionMsg, Env, Response, StakingMsg};
 
-use crate::{ContractError, state::{DENOM, STAKING_REWARD_ADDRESS}};
+use crate::{
+    state::{DENOM, STAKING_REWARD_ADDRESS},
+    ContractError,
+};
 
 pub fn delegate(response: Response, validator: String, amount: u128, denom: String) -> Response {
     let msg = StakingMsg::Delegate {
@@ -10,7 +13,13 @@ pub fn delegate(response: Response, validator: String, amount: u128, denom: Stri
     response.add_message(msg)
 }
 
-pub fn redelegate(response: Response, src_validator: String, dst_validator: String, amount: u128, denom: String) -> Response {
+pub fn redelegate(
+    response: Response,
+    src_validator: String,
+    dst_validator: String,
+    amount: u128,
+    denom: String,
+) -> Response {
     let msg = StakingMsg::Redelegate {
         src_validator,
         dst_validator,
@@ -27,11 +36,21 @@ pub fn undelegate(response: Response, validator: String, amount: u128, denom: St
     response.add_message(msg)
 }
 
-pub fn withdraw_delegation_rewards(deps: Deps, response: Response, validator: String, amount: u128) -> Result<Response, ContractError> {
-    let msg = DistributionMsg::WithdrawDelegatorReward { validator: validator };
+pub fn withdraw_delegation_rewards(
+    deps: Deps,
+    response: Response,
+    validator: String,
+    amount: u128,
+) -> Result<Response, ContractError> {
+    let msg = DistributionMsg::WithdrawDelegatorReward {
+        validator: validator,
+    };
     let denom = DENOM.load(deps.storage)?;
     let to_address = STAKING_REWARD_ADDRESS.load(deps.storage)?;
-    let send_msg = BankMsg::Send { to_address: to_address.to_string(), amount: coins(amount, denom) };
+    let send_msg = BankMsg::Send {
+        to_address: to_address.to_string(),
+        amount: coins(amount, denom),
+    };
     let mut new_response = response.add_message(msg);
     new_response = new_response.add_message(send_msg);
     Ok(new_response)
@@ -40,13 +59,25 @@ pub fn withdraw_delegation_rewards(deps: Deps, response: Response, validator: St
 // the `all_delegations` endpoint do not return full delegation info (i.e. no withdrawable delegation reward)
 // so we only return validators here for subsequent logic to query full delegation info one validator at a time
 pub fn get_all_delegated_validators(deps: Deps, env: Env) -> Result<Vec<String>, ContractError> {
-    Ok(deps.querier.query_all_delegations(env.contract.address.to_string()).map(|delegations| -> Vec<String> {
-        delegations.iter().map(|delegation| -> String { delegation.validator.clone() }).collect()
-    })?)
+    Ok(deps
+        .querier
+        .query_all_delegations(env.contract.address.to_string())
+        .map(|delegations| -> Vec<String> {
+            delegations
+                .iter()
+                .map(|delegation| -> String { delegation.validator.clone() })
+                .collect()
+        })?)
 }
 
-pub fn get_delegation_rewards(deps: Deps, env: Env, validator: String) -> Result<u128, ContractError> {
-    let delegation = deps.querier.query_delegation(env.contract.address.to_string(), validator)?;
+pub fn get_delegation_rewards(
+    deps: Deps,
+    env: Env,
+    validator: String,
+) -> Result<u128, ContractError> {
+    let delegation = deps
+        .querier
+        .query_delegation(env.contract.address.to_string(), validator)?;
     if delegation.is_none() {
         return Ok(0);
     }
@@ -62,7 +93,10 @@ pub fn get_delegation_rewards(deps: Deps, env: Env, validator: String) -> Result
 
 #[cfg(test)]
 mod tests {
-    use cosmwasm_std::{testing::{mock_dependencies, mock_env}, Validator, Decimal, FullDelegation, Coin, Addr};
+    use cosmwasm_std::{
+        testing::{mock_dependencies, mock_env},
+        Addr, Coin, Decimal, FullDelegation, Validator,
+    };
 
     use crate::state::DENOM;
 
@@ -76,7 +110,9 @@ mod tests {
         let mut deps = mock_dependencies();
         let mut env = mock_env();
         env.contract.address = Addr::unchecked(DELEGATOR);
-        DENOM.save(deps.as_mut().storage, &"usei".to_string()).unwrap();
+        DENOM
+            .save(deps.as_mut().storage, &"usei".to_string())
+            .unwrap();
 
         let result = get_delegation_rewards(deps.as_ref(), env, VALIDATOR.to_string()).unwrap();
         assert_eq!(0u128, result);
@@ -85,21 +121,27 @@ mod tests {
     #[test]
     fn test_get_delegation_rewards() {
         let mut deps = mock_dependencies();
-        deps.querier.update_staking("usei", &[Validator{
-            address: VALIDATOR.to_string(),
-            commission: Decimal::zero(),
-            max_commission: Decimal::zero(),
-            max_change_rate: Decimal::zero(),
-        }], &[FullDelegation{
-            delegator: Addr::unchecked(DELEGATOR),
-            validator: VALIDATOR.to_string(),
-            amount: Coin::new(1000000, "usei"),
-            can_redelegate: Coin::new(0, "usei"),
-            accumulated_rewards: vec![Coin::new(10, "usei"), Coin::new(20, "usei")],
-        }]);
+        deps.querier.update_staking(
+            "usei",
+            &[Validator {
+                address: VALIDATOR.to_string(),
+                commission: Decimal::zero(),
+                max_commission: Decimal::zero(),
+                max_change_rate: Decimal::zero(),
+            }],
+            &[FullDelegation {
+                delegator: Addr::unchecked(DELEGATOR),
+                validator: VALIDATOR.to_string(),
+                amount: Coin::new(1000000, "usei"),
+                can_redelegate: Coin::new(0, "usei"),
+                accumulated_rewards: vec![Coin::new(10, "usei"), Coin::new(20, "usei")],
+            }],
+        );
         let mut env = mock_env();
         env.contract.address = Addr::unchecked(DELEGATOR);
-        DENOM.save(deps.as_mut().storage, &"usei".to_string()).unwrap();
+        DENOM
+            .save(deps.as_mut().storage, &"usei".to_string())
+            .unwrap();
 
         let result = get_delegation_rewards(deps.as_ref(), env, VALIDATOR.to_string()).unwrap();
         assert_eq!(30u128, result);
