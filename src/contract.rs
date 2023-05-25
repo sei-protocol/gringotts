@@ -107,6 +107,7 @@ pub fn execute(
         ExecuteMsg::InitiateWithdrawReward {} => {
             execute_initiate_withdraw_reward(deps.as_ref(), env, info)
         }
+        ExecuteMsg::UpdateOp { op, remove } => execute_update_op(deps, info, op, remove),
         ExecuteMsg::ProposeUpdateAdmin { admin, remove } => {
             execute_propose_update_admin(deps, env, info, admin, remove)
         }
@@ -182,6 +183,21 @@ fn execute_initiate_withdraw_reward(
         response = withdraw_delegation_rewards(deps, response, validator, withdrawable_amount)?;
     }
     Ok(response)
+}
+
+fn execute_update_op(
+    deps: DepsMut,
+    info: MessageInfo,
+    op: Addr,
+    remove: bool,
+) -> Result<Response<Empty>, ContractError> {
+    authorize_admin(deps.storage, info.sender)?;
+    if remove {
+        OPS.remove(deps.storage, &op);
+    } else {
+        OPS.save(deps.storage, &op, &EmptyStruct {})?;
+    }
+    Ok(Response::new())
 }
 
 fn execute_propose_update_admin(
@@ -436,6 +452,7 @@ mod tests {
     use cw_utils::{Duration, Expiration, ThresholdResponse};
 
     use crate::data_structure::Tranche;
+    use crate::state::get_number_of_ops;
 
     use super::*;
 
@@ -928,11 +945,11 @@ mod tests {
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let info = mock_info(mock_env().contract.address.as_str(), &[]);
-        let proposal = ExecuteMsg::InternalUpdateAdmin {
+        let msg = ExecuteMsg::InternalUpdateAdmin {
             admin: Addr::unchecked("new_admin1"),
             remove: false,
         };
-        execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
+        execute(deps.as_mut(), mock_env(), info, msg.clone()).unwrap();
         ADMINS
             .load(deps.as_ref().storage, &Addr::unchecked("new_admin1"))
             .unwrap();
@@ -947,11 +964,11 @@ mod tests {
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let info = mock_info(mock_env().contract.address.as_str(), &[]);
-        let proposal = ExecuteMsg::InternalUpdateAdmin {
+        let msg = ExecuteMsg::InternalUpdateAdmin {
             admin: Addr::unchecked(VOTER1),
             remove: true,
         };
-        execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
+        execute(deps.as_mut(), mock_env(), info, msg.clone()).unwrap();
         ADMINS
             .load(deps.as_ref().storage, &Addr::unchecked(VOTER1))
             .unwrap_err();
@@ -966,19 +983,71 @@ mod tests {
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let info = mock_info(VOTER1, &[]);
-        let proposal = ExecuteMsg::InternalUpdateAdmin {
+        let msg = ExecuteMsg::InternalUpdateAdmin {
             admin: Addr::unchecked("new_admin1"),
             remove: false,
         };
-        let err = execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap_err();
+        let err = execute(deps.as_mut(), mock_env(), info, msg.clone()).unwrap_err();
         assert_eq!(err, ContractError::Unauthorized {});
         ADMINS
             .load(deps.as_ref().storage, &Addr::unchecked("new_admin1"))
             .unwrap_err();
-        ADMINS
-            .load(deps.as_ref().storage, &Addr::unchecked("new_admin2"))
-            .unwrap_err();
         assert_eq!(4, get_number_of_admins(deps.as_ref().storage));
+    }
+
+    #[test]
+    fn test_execute_update_op_works() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let info = mock_info(VOTER1, &[]);
+        let msg = ExecuteMsg::UpdateOp {
+            op: Addr::unchecked("new_op1"),
+            remove: false,
+        };
+        execute(deps.as_mut(), mock_env(), info, msg.clone()).unwrap();
+        OPS.load(deps.as_ref().storage, &Addr::unchecked("new_op1"))
+            .unwrap();
+        assert_eq!(3, get_number_of_ops(deps.as_ref().storage));
+    }
+
+    #[test]
+    fn test_execute_update_op_remove_works() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let info = mock_info(VOTER1, &[]);
+        let msg = ExecuteMsg::UpdateOp {
+            op: Addr::unchecked(VOTER5),
+            remove: true,
+        };
+        execute(deps.as_mut(), mock_env(), info, msg.clone()).unwrap();
+        OPS.load(deps.as_ref().storage, &Addr::unchecked(VOTER5))
+            .unwrap_err();
+        assert_eq!(1, get_number_of_ops(deps.as_ref().storage));
+    }
+
+    #[test]
+    fn test_execute_update_op_unauthorized() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let info = mock_info(VOTER5, &[]);
+        let msg = ExecuteMsg::UpdateOp {
+            op: Addr::unchecked("new_op1"),
+            remove: false,
+        };
+        let err = execute(deps.as_mut(), mock_env(), info, msg.clone()).unwrap_err();
+        assert_eq!(err, ContractError::Unauthorized {});
+        OPS.load(deps.as_ref().storage, &Addr::unchecked("new_op1"))
+            .unwrap_err();
+        assert_eq!(2, get_number_of_ops(deps.as_ref().storage));
     }
 
     #[test]
