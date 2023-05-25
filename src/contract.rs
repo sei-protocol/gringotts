@@ -1,16 +1,22 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    to_binary, Addr, Binary, CosmosMsg, Decimal, Deps, DepsMut, Empty, Env, MessageInfo, Response,
-    StdResult, WasmMsg,
+    to_binary, Addr, Binary, BlockInfo, CosmosMsg, Decimal, Deps, DepsMut, Empty, Env, MessageInfo,
+    Order, Response, StdResult, WasmMsg,
 };
 use cw2::set_contract_version;
-use cw3::{Ballot, Proposal, Status, Vote, Votes};
+use cw3::{
+    Ballot, Proposal, ProposalListResponse, ProposalResponse, Status, Vote, VoteInfo,
+    VoteListResponse, Votes,
+};
 use cw_utils::{Threshold, ThresholdError};
 
 use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::msg::{
+    AdminListResponse, ExecuteMsg, InstantiateMsg, OpListResponse, QueryMsg, ShowConfigResponse,
+    ShowInfoResponse,
+};
 use crate::permission::{authorize_admin, authorize_op, authorize_self_call};
 use crate::staking::{
     delegate, get_all_delegated_validators, get_delegation_rewards, redelegate, undelegate,
@@ -19,7 +25,7 @@ use crate::staking::{
 use crate::state::{
     get_number_of_admins, next_proposal_id, ADMINS, ADMIN_VOTING_THRESHOLD, BALLOTS, DENOM,
     MAX_VOTING_PERIOD, OPS, PROPOSALS, STAKING_REWARD_ADDRESS, UNLOCK_DISTRIBUTION_ADDRESS,
-    VESTING_AMOUNTS, VESTING_TIMESTAMPS,
+    VESTING_AMOUNTS, VESTING_TIMESTAMPS, WITHDRAWN_STAKING_REWARDS,
 };
 use crate::vesting::{collect_vested, distribute_vested};
 
@@ -71,7 +77,8 @@ pub fn instantiate(
         &Threshold::AbsolutePercentage {
             percentage: Decimal::percent(msg.admin_voting_threshold_percentage as u64),
         },
-    )?; // intentionally hardcoded
+    )?;
+    WITHDRAWN_STAKING_REWARDS.save(deps.storage, &0)?;
     Ok(Response::default())
 }
 
@@ -329,17 +336,104 @@ fn execute_internal_update_admin(
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn query(_deps: Deps, _env: Env, _msg: QueryMsg) -> StdResult<Binary> {
-    Ok(to_binary("").unwrap())
+pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
+    match msg {
+        QueryMsg::ListProposals {} => to_binary(&query_proposals(deps, env)?),
+        QueryMsg::ListVotes { proposal_id } => to_binary(&query_votes(deps, proposal_id)?),
+        QueryMsg::ListAdmins {} => to_binary(&query_admins(deps)?),
+        QueryMsg::ListOps {} => to_binary(&query_ops(deps)?),
+        QueryMsg::Info {} => to_binary(&query_info(deps)?),
+        QueryMsg::Config {} => to_binary(&query_config(deps)?),
+    }
+}
+
+fn query_proposals(deps: Deps, env: Env) -> StdResult<ProposalListResponse> {
+    let proposals: Vec<ProposalResponse> = PROPOSALS
+        .range(deps.storage, None, None, Order::Descending)
+        .map(|p| map_proposal(&env.block, p))
+        .collect::<StdResult<_>>()?;
+    Ok(ProposalListResponse { proposals })
+}
+
+fn map_proposal(
+    block: &BlockInfo,
+    item: StdResult<(u64, Proposal)>,
+) -> StdResult<ProposalResponse> {
+    item.map(|(id, prop)| {
+        let status = prop.current_status(block);
+        let threshold = prop.threshold.to_response(prop.total_weight);
+        ProposalResponse {
+            id,
+            title: prop.title,
+            description: prop.description,
+            msgs: prop.msgs,
+            status,
+            deposit: prop.deposit,
+            proposer: prop.proposer,
+            expires: prop.expires,
+            threshold,
+        }
+    })
+}
+
+fn query_votes(deps: Deps, proposal_id: u64) -> StdResult<VoteListResponse> {
+    let votes = BALLOTS
+        .prefix(proposal_id)
+        .range(deps.storage, None, None, Order::Ascending)
+        .map(|item| {
+            item.map(|(addr, ballot)| VoteInfo {
+                proposal_id,
+                voter: addr.into(),
+                vote: ballot.vote,
+                weight: ballot.weight,
+            })
+        })
+        .collect::<StdResult<_>>()?;
+
+    Ok(VoteListResponse { votes })
+}
+
+fn query_admins(deps: Deps) -> StdResult<AdminListResponse> {
+    let admins: Vec<Addr> = ADMINS
+        .range(deps.storage, None, None, Order::Ascending)
+        .map(|admin| admin.map(|(admin, _)| -> Addr { admin }))
+        .collect::<StdResult<_>>()?;
+    Ok(AdminListResponse { admins })
+}
+
+fn query_ops(deps: Deps) -> StdResult<OpListResponse> {
+    let ops: Vec<Addr> = OPS
+        .range(deps.storage, None, None, Order::Ascending)
+        .map(|op| op.map(|(op, _)| -> Addr { op }))
+        .collect::<StdResult<_>>()?;
+    Ok(OpListResponse { ops })
+}
+
+fn query_info(deps: Deps) -> StdResult<ShowInfoResponse> {
+    Ok(ShowInfoResponse {
+        denom: DENOM.load(deps.storage)?,
+        vesting_timestamps: VESTING_TIMESTAMPS.load(deps.storage)?,
+        vesting_amounts: VESTING_AMOUNTS.load(deps.storage)?,
+        unlock_distribution_address: UNLOCK_DISTRIBUTION_ADDRESS.load(deps.storage)?,
+        staking_reward_address: STAKING_REWARD_ADDRESS.load(deps.storage)?,
+        withdrawn_staking_rewards: WITHDRAWN_STAKING_REWARDS.load(deps.storage)?,
+    })
+}
+
+fn query_config(deps: Deps) -> StdResult<ShowConfigResponse> {
+    Ok(ShowConfigResponse {
+        max_voting_period: MAX_VOTING_PERIOD.load(deps.storage)?,
+        admin_voting_threshold: ADMIN_VOTING_THRESHOLD.load(deps.storage)?,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{Addr, Coin, Decimal, FullDelegation, Validator};
+    use cosmwasm_std::{from_binary, Addr, Coin, Decimal, FullDelegation, Validator};
 
     use cw2::{get_contract_version, ContractVersion};
-    use cw_utils::Duration;
+    use cw_utils::{Duration, Expiration, ThresholdResponse};
 
     use crate::data_structure::Tranche;
 
@@ -885,5 +979,165 @@ mod tests {
             .load(deps.as_ref().storage, &Addr::unchecked("new_admin2"))
             .unwrap_err();
         assert_eq!(4, get_number_of_admins(deps.as_ref().storage));
+    }
+
+    #[test]
+    fn test_query_proposals() {
+        let mut deps = mock_dependencies();
+        PROPOSALS
+            .save(
+                deps.as_mut().storage,
+                1,
+                &Proposal {
+                    title: "title".to_string(),
+                    description: "description".to_string(),
+                    start_height: 1,
+                    expires: Expiration::Never {},
+                    msgs: vec![],
+                    status: Status::Open,
+                    votes: Votes::yes(1),
+                    threshold: Threshold::AbsolutePercentage {
+                        percentage: Decimal::percent(75),
+                    },
+                    total_weight: 4,
+                    proposer: Addr::unchecked("proposer"),
+                    deposit: None,
+                },
+            )
+            .unwrap();
+        let msg = QueryMsg::ListProposals {};
+        let bin = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let res: ProposalListResponse = from_binary(&bin).unwrap();
+        assert_eq!(
+            res.proposals,
+            vec![ProposalResponse {
+                id: 1,
+                title: "title".to_string(),
+                description: "description".to_string(),
+                expires: Expiration::Never {},
+                msgs: vec![],
+                status: Status::Open,
+                threshold: ThresholdResponse::AbsolutePercentage {
+                    percentage: Decimal::percent(75),
+                    total_weight: 4,
+                },
+                proposer: Addr::unchecked("proposer"),
+                deposit: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_query_votes() {
+        let mut deps = mock_dependencies();
+        BALLOTS
+            .save(
+                deps.as_mut().storage,
+                (1, &Addr::unchecked("admin")),
+                &Ballot {
+                    weight: 1,
+                    vote: Vote::Yes,
+                },
+            )
+            .unwrap();
+        BALLOTS
+            .save(
+                deps.as_mut().storage,
+                (2, &Addr::unchecked("admin")),
+                &Ballot {
+                    weight: 1,
+                    vote: Vote::No,
+                },
+            )
+            .unwrap();
+        let msg = QueryMsg::ListVotes { proposal_id: 1 };
+        let bin = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let res: VoteListResponse = from_binary(&bin).unwrap();
+        assert_eq!(
+            res.votes,
+            vec![VoteInfo {
+                proposal_id: 1,
+                voter: "admin".to_string(),
+                vote: Vote::Yes,
+                weight: 1,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_query_admins() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+        let msg = QueryMsg::ListAdmins {};
+        let bin = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let res: AdminListResponse = from_binary(&bin).unwrap();
+        assert_eq!(
+            res.admins,
+            vec![
+                Addr::unchecked(VOTER1),
+                Addr::unchecked(VOTER2),
+                Addr::unchecked(VOTER3),
+                Addr::unchecked(VOTER4),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_query_ops() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+        let msg = QueryMsg::ListOps {};
+        let bin = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let res: OpListResponse = from_binary(&bin).unwrap();
+        assert_eq!(
+            res.ops,
+            vec![Addr::unchecked(VOTER5), Addr::unchecked(VOTER6),]
+        );
+    }
+
+    #[test]
+    fn test_query_info() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+        let msg = QueryMsg::Info {};
+        let bin = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let res: ShowInfoResponse = from_binary(&bin).unwrap();
+        assert_eq!(
+            res,
+            ShowInfoResponse {
+                denom: "usei".to_string(),
+                vesting_timestamps: VESTING_TIMESTAMPS.load(deps.as_ref().storage).unwrap(),
+                vesting_amounts: VESTING_AMOUNTS.load(deps.as_ref().storage).unwrap(),
+                unlock_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
+                staking_reward_address: Addr::unchecked(REWARD_ADDR1),
+                withdrawn_staking_rewards: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn test_query_config() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+        let msg = QueryMsg::Config {};
+        let bin = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let res: ShowConfigResponse = from_binary(&bin).unwrap();
+        assert_eq!(
+            res,
+            ShowConfigResponse {
+                max_voting_period: Duration::Time(3600),
+                admin_voting_threshold: Threshold::AbsolutePercentage {
+                    percentage: Decimal::percent(75)
+                },
+            }
+        );
     }
 }
