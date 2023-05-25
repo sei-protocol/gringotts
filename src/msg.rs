@@ -34,6 +34,9 @@ pub enum ExecuteMsg {
         op: Addr,
         remove: bool,
     },
+    ProposeEmergencyWithdraw {
+        dst: Addr,
+    },
     ProposeUpdateAdmin {
         admin: Addr,
         remove: bool,
@@ -47,6 +50,9 @@ pub enum ExecuteMsg {
     InternalUpdateAdmin {
         admin: Addr,
         remove: bool,
+    },
+    InternalWithdrawLocked {
+        dst: Addr,
     },
 }
 
@@ -85,6 +91,8 @@ pub struct ShowInfoResponse {
     pub unlock_distribution_address: Addr,
     pub staking_reward_address: Addr,
     pub withdrawn_staking_rewards: u128,
+    pub withdrawn_unlocked: u128,
+    pub withdrawn_locked: u128,
 }
 
 #[cw_serde]
