@@ -30,6 +30,10 @@ pub enum ExecuteMsg {
     },
     InitiateWithdrawUnlocked {},
     InitiateWithdrawReward {},
+    UpdateOp {
+        op: Addr,
+        remove: bool,
+    },
     ProposeUpdateAdmin {
         admin: Addr,
         remove: bool,
