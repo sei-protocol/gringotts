@@ -15,7 +15,7 @@ use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{
     AdminListResponse, ExecuteMsg, InstantiateMsg, OpListResponse, QueryMsg, ShowConfigResponse,
-    ShowInfoResponse,
+    ShowInfoResponse, MigrateMsg,
 };
 use crate::permission::{authorize_admin, authorize_op, authorize_self_call};
 use crate::staking::{
@@ -441,6 +441,11 @@ fn query_config(deps: Deps) -> StdResult<ShowConfigResponse> {
         max_voting_period: MAX_VOTING_PERIOD.load(deps.storage)?,
         admin_voting_threshold: ADMIN_VOTING_THRESHOLD.load(deps.storage)?,
     })
+}
+
+#[cfg_attr(not(feature = "library"), entry_point)]
+pub fn migrate(_deps: DepsMut, _env: Env, _msg: MigrateMsg) -> StdResult<Response> {
+    Ok(Response::default())
 }
 
 #[cfg(test)]

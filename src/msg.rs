@@ -92,3 +92,6 @@ pub struct ShowConfigResponse {
     pub max_voting_period: Duration,
     pub admin_voting_threshold: Threshold,
 }
+
+#[cw_serde]
+pub struct MigrateMsg {}
