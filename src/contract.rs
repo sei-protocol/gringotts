@@ -1,8 +1,8 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    to_binary, Addr, Binary, BlockInfo, CosmosMsg, Decimal, Deps, DepsMut, Empty, Env, MessageInfo,
-    Order, Response, StdResult, WasmMsg,
+    coins, to_binary, Addr, BankMsg, Binary, BlockInfo, CosmosMsg, Decimal, Deps, DepsMut, Empty,
+    Env, MessageInfo, Order, Response, StdError, StdResult, WasmMsg,
 };
 use cw2::set_contract_version;
 use cw3::{
@@ -25,7 +25,8 @@ use crate::staking::{
 use crate::state::{
     get_number_of_admins, next_proposal_id, ADMINS, ADMIN_VOTING_THRESHOLD, BALLOTS, DENOM,
     MAX_VOTING_PERIOD, OPS, PROPOSALS, STAKING_REWARD_ADDRESS, UNLOCK_DISTRIBUTION_ADDRESS,
-    VESTING_AMOUNTS, VESTING_TIMESTAMPS, WITHDRAWN_STAKING_REWARDS,
+    VESTING_AMOUNTS, VESTING_TIMESTAMPS, WITHDRAWN_LOCKED, WITHDRAWN_STAKING_REWARDS,
+    WITHDRAWN_UNLOCKED,
 };
 use crate::vesting::{collect_vested, distribute_vested};
 
@@ -79,6 +80,8 @@ pub fn instantiate(
         },
     )?;
     WITHDRAWN_STAKING_REWARDS.save(deps.storage, &0)?;
+    WITHDRAWN_UNLOCKED.save(deps.storage, &0)?;
+    WITHDRAWN_LOCKED.save(deps.storage, &0)?;
     Ok(Response::default())
 }
 
@@ -104,12 +107,13 @@ pub fn execute(
         ExecuteMsg::InitiateWithdrawUnlocked {} => {
             execute_initiate_withdraw_unlocked(deps, env, info)
         }
-        ExecuteMsg::InitiateWithdrawReward {} => {
-            execute_initiate_withdraw_reward(deps.as_ref(), env, info)
-        }
         ExecuteMsg::UpdateOp { op, remove } => execute_update_op(deps, info, op, remove),
+        ExecuteMsg::InitiateWithdrawReward {} => execute_initiate_withdraw_reward(deps, env, info),
         ExecuteMsg::ProposeUpdateAdmin { admin, remove } => {
             execute_propose_update_admin(deps, env, info, admin, remove)
+        }
+        ExecuteMsg::ProposeEmergencyWithdraw { dst } => {
+            execute_propose_emergency_withdraw(deps, env, info, dst)
         }
         ExecuteMsg::VoteProposal { proposal_id } => execute_vote(deps, env, info, proposal_id),
         ExecuteMsg::ProcessProposal { proposal_id } => {
@@ -117,6 +121,9 @@ pub fn execute(
         }
         ExecuteMsg::InternalUpdateAdmin { admin, remove } => {
             execute_internal_update_admin(deps, env, info, admin, remove)
+        }
+        ExecuteMsg::InternalWithdrawLocked { dst } => {
+            execute_internal_withdraw_locked(deps, env, info, dst)
         }
     }
 }
@@ -168,20 +175,30 @@ fn execute_initiate_withdraw_unlocked(
 ) -> Result<Response<Empty>, ContractError> {
     authorize_op(deps.storage, info.sender)?;
     let vested_amount = collect_vested(deps.storage, env.block.time)?;
+    WITHDRAWN_UNLOCKED.update(deps.storage, |old| -> Result<u128, StdError> {
+        Ok(old + vested_amount)
+    })?;
     distribute_vested(deps.storage, vested_amount, Response::new())
 }
 
 fn execute_initiate_withdraw_reward(
-    deps: Deps,
+    deps: DepsMut,
     env: Env,
     info: MessageInfo,
 ) -> Result<Response<Empty>, ContractError> {
     authorize_op(deps.storage, info.sender)?;
     let mut response = Response::new();
-    for validator in get_all_delegated_validators(deps, env.clone())? {
-        let withdrawable_amount = get_delegation_rewards(deps, env.clone(), validator.clone())?;
-        response = withdraw_delegation_rewards(deps, response, validator, withdrawable_amount)?;
+    let mut total = 0u128;
+    for validator in get_all_delegated_validators(deps.as_ref(), env.clone())? {
+        let withdrawable_amount =
+            get_delegation_rewards(deps.as_ref(), env.clone(), validator.clone())?;
+        response =
+            withdraw_delegation_rewards(deps.as_ref(), response, validator, withdrawable_amount)?;
+        total += withdrawable_amount;
     }
+    WITHDRAWN_STAKING_REWARDS.update(deps.storage, |old| -> Result<u128, StdError> {
+        Ok(old + total)
+    })?;
     Ok(response)
 }
 
@@ -217,6 +234,27 @@ fn execute_propose_update_admin(
     } else {
         title = format!("add {}", admin.to_string());
     }
+    execute_propose(
+        deps,
+        env.clone(),
+        info.clone(),
+        title.clone(),
+        vec![CosmosMsg::Wasm(WasmMsg::Execute {
+            contract_addr: env.contract.address.to_string(),
+            msg: to_binary(&msg)?,
+            funds: vec![],
+        })],
+    )
+}
+
+fn execute_propose_emergency_withdraw(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    dst: Addr,
+) -> Result<Response<Empty>, ContractError> {
+    let title = format!("emergecy withdraw to {}", dst.to_string());
+    let msg = ExecuteMsg::InternalWithdrawLocked { dst };
     execute_propose(
         deps,
         env.clone(),
@@ -351,6 +389,25 @@ fn execute_internal_update_admin(
     Ok(Response::new())
 }
 
+fn execute_internal_withdraw_locked(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    dst: Addr,
+) -> Result<Response<Empty>, ContractError> {
+    authorize_self_call(env, info)?;
+    let amount = VESTING_AMOUNTS.load(deps.storage)?.iter().sum();
+    VESTING_AMOUNTS.save(deps.storage, &vec![])?;
+    VESTING_TIMESTAMPS.save(deps.storage, &vec![])?;
+    WITHDRAWN_LOCKED.update(deps.storage, |old| -> Result<u128, StdError> {
+        Ok(old + amount)
+    })?;
+    Ok(Response::new().add_message(BankMsg::Send {
+        to_address: dst.to_string(),
+        amount: coins(amount, DENOM.load(deps.storage)?),
+    }))
+}
+
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
@@ -433,6 +490,8 @@ fn query_info(deps: Deps) -> StdResult<ShowInfoResponse> {
         unlock_distribution_address: UNLOCK_DISTRIBUTION_ADDRESS.load(deps.storage)?,
         staking_reward_address: STAKING_REWARD_ADDRESS.load(deps.storage)?,
         withdrawn_staking_rewards: WITHDRAWN_STAKING_REWARDS.load(deps.storage)?,
+        withdrawn_unlocked: WITHDRAWN_UNLOCKED.load(deps.storage)?,
+        withdrawn_locked: WITHDRAWN_LOCKED.load(deps.storage)?,
     })
 }
 
@@ -446,7 +505,7 @@ fn query_config(deps: Deps) -> StdResult<ShowConfigResponse> {
 #[cfg(test)]
 mod tests {
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{from_binary, Addr, Coin, Decimal, FullDelegation, Validator};
+    use cosmwasm_std::{from_binary, Addr, Coin, Decimal, FullDelegation, Timestamp, Validator};
 
     use cw2::{get_contract_version, ContractVersion};
     use cw_utils::{Duration, Expiration, ThresholdResponse};
@@ -686,6 +745,10 @@ mod tests {
         env.block = block;
         let res = execute(deps.as_mut(), env, info, msg).unwrap();
         assert_eq!(1, res.messages.len());
+        assert_eq!(
+            12000000,
+            WITHDRAWN_UNLOCKED.load(deps.as_ref().storage).unwrap()
+        );
     }
 
     #[test]
@@ -749,6 +812,12 @@ mod tests {
         let msg = ExecuteMsg::InitiateWithdrawReward {};
         let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
         assert_eq!(4, res.messages.len());
+        assert_eq!(
+            35,
+            WITHDRAWN_STAKING_REWARDS
+                .load(deps.as_ref().storage)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -798,6 +867,45 @@ mod tests {
         let proposal = ExecuteMsg::ProposeUpdateAdmin {
             admin: Addr::unchecked("new_admin1"),
             remove: false,
+        };
+        let err = execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap_err();
+        assert_eq!(err, ContractError::Unauthorized {});
+    }
+
+    #[test]
+    fn test_propose_emergency_withdraw_works() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let info = mock_info(VOTER1, &[]);
+        let proposal = ExecuteMsg::ProposeEmergencyWithdraw {
+            dst: Addr::unchecked("destination"),
+        };
+        let res = execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
+
+        // Verify
+        assert_eq!(
+            res,
+            Response::new()
+                .add_attribute("action", "propose")
+                .add_attribute("sender", VOTER1)
+                .add_attribute("proposal_id", 1.to_string())
+                .add_attribute("status", "Open")
+        );
+    }
+
+    #[test]
+    fn test_propose_emergency_withdraw_unauthorized() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let info = mock_info(OWNER, &[]);
+        let proposal = ExecuteMsg::ProposeEmergencyWithdraw {
+            dst: Addr::unchecked("destination"),
         };
         let err = execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap_err();
         assert_eq!(err, ContractError::Unauthorized {});
@@ -1051,6 +1159,60 @@ mod tests {
     }
 
     #[test]
+    fn test_execute_internal_withdraw_locked_works() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let info = mock_info(mock_env().contract.address.as_str(), &[]);
+        let proposal = ExecuteMsg::InternalWithdrawLocked {
+            dst: Addr::unchecked("destination"),
+        };
+        let res = execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
+        assert_eq!(1, res.messages.len());
+        assert_eq!(
+            vec![] as Vec<u128>,
+            VESTING_AMOUNTS.load(deps.as_ref().storage).unwrap()
+        );
+        assert_eq!(
+            vec![] as Vec<Timestamp>,
+            VESTING_TIMESTAMPS.load(deps.as_ref().storage).unwrap()
+        );
+        assert_eq!(
+            48000000,
+            WITHDRAWN_LOCKED.load(deps.as_ref().storage).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_execute_internal_withdraw_locked_unauthorized() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let info = mock_info(VOTER1, &[]);
+        let proposal = ExecuteMsg::InternalWithdrawLocked {
+            dst: Addr::unchecked("destination"),
+        };
+        let err = execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap_err();
+        assert_eq!(ContractError::Unauthorized {}, err);
+        assert_eq!(
+            37,
+            VESTING_AMOUNTS.load(deps.as_ref().storage).unwrap().len()
+        );
+        assert_eq!(
+            37,
+            VESTING_TIMESTAMPS
+                .load(deps.as_ref().storage)
+                .unwrap()
+                .len()
+        );
+        assert_eq!(0, WITHDRAWN_LOCKED.load(deps.as_ref().storage).unwrap());
+    }
+
+    #[test]
     fn test_query_proposals() {
         let mut deps = mock_dependencies();
         PROPOSALS
@@ -1186,6 +1348,8 @@ mod tests {
                 unlock_distribution_address: Addr::unchecked(UNLOCK_ADDR1),
                 staking_reward_address: Addr::unchecked(REWARD_ADDR1),
                 withdrawn_staking_rewards: 0,
+                withdrawn_locked: 0,
+                withdrawn_unlocked: 0,
             }
         );
     }
