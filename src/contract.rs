@@ -14,7 +14,7 @@ use cw_utils::{Threshold, ThresholdError};
 use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{
-    AdminListResponse, ExecuteMsg, InstantiateMsg, OpListResponse, QueryMsg, ShowConfigResponse,
+    AdminListResponse, ExecuteMsg, InstantiateMsg, MigrateMsg, OpListResponse, QueryMsg, ShowConfigResponse,
     ShowInfoResponse,
 };
 use crate::permission::{authorize_admin, authorize_op, authorize_self_call};
@@ -33,6 +33,17 @@ use crate::vesting::{collect_vested, distribute_vested};
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:sei-gringotts";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+// NOTE: New migrations may need store migrations if store changes are being made
+#[cfg_attr(not(feature = "library"), entry_point)]
+pub fn migrate(
+    _deps: DepsMut,
+    _env: Env,
+    _msg: MigrateMsg,
+) -> Result<Response, ContractError> {
+    //TODO: Add necessary migration logic
+    Ok(Response::default())
+}
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
