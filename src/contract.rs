@@ -29,19 +29,43 @@ use crate::state::{
     WITHDRAWN_UNLOCKED,
 };
 use crate::vesting::{collect_vested, distribute_vested};
+use semver::Version;
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:sei-gringotts";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub fn validate_migration(
+    deps: Deps,
+    contract_name: &str,
+    contract_version: &str,
+) -> Result<(), ContractError> {
+    let ver = cw2::get_contract_version(deps.storage)?;
+    // ensure we are migrating from an allowed contract
+    if ver.contract != contract_name {
+        return Err(StdError::generic_err("Can only upgrade from same type").into());
+    }
+
+    let storage_version: Version = ver.version.parse()?;
+    let version: Version = contract_version.parse()?;
+    if storage_version >= version {
+        return Err(StdError::generic_err("Cannot upgrade from a newer version").into());
+    }
+    Ok(())
+}
+
 // NOTE: New migrations may need store migrations if store changes are being made
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn migrate(
-    _deps: DepsMut,
+    deps: DepsMut,
     _env: Env,
     _msg: MigrateMsg,
 ) -> Result<Response, ContractError> {
-    //TODO: Add necessary migration logic
+    validate_migration(deps.as_ref(), CONTRACT_NAME, CONTRACT_VERSION)?;
+
+    // set the new version
+    cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+
     Ok(Response::default())
 }
 
@@ -1383,5 +1407,40 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn test_migration() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        // test incorrect contract name to assert error
+        cw2::set_contract_version(&mut deps.storage, "this_is_the_wrong_contract", "0.0.1")
+            .unwrap();
+        let res = migrate(deps.as_mut(), mock_env(), MigrateMsg {});
+        match res {
+            Err(ContractError::Std(x)) => {
+                assert_eq!(x, StdError::generic_err("Can only upgrade from same type"))
+            }
+            _ => panic!("This should raise error on contract type mismatch"),
+        };
+
+        // set contract version to older one so we can test migrations
+        cw2::set_contract_version(&mut deps.storage, CONTRACT_NAME, "0.0.1").unwrap();
+
+        let res = migrate(deps.as_mut(), mock_env(), MigrateMsg {}).unwrap();
+        assert_eq!(res, Response::default(),);
+
+        // This should raise an error on curr version >= proposed version
+        let res = migrate(deps.as_mut(), mock_env(), MigrateMsg {});
+        match res {
+            Err(ContractError::Std(x)) => assert_eq!(
+                x,
+                StdError::generic_err("Cannot upgrade from a newer version")
+            ),
+            _ => panic!("This should raise error on version validation failure"),
+        };
     }
 }
