@@ -1,2 +1,9 @@
-/target
-Cargo.lock
+**/target
+
+**/Cargo.lock
+
+# Build artifacts
+*.wasm
+hash.txt
+contracts.txt
+artifacts/
