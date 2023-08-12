@@ -66,6 +66,9 @@ pub fn migrate(
     // set the new version
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
+    WITHDRAWN_UNLOCKED.save(deps.storage, &0)?;
+    WITHDRAWN_LOCKED.save(deps.storage, &0)?;
+
     Ok(Response::default())
 }
 
