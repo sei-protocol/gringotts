@@ -2,7 +2,7 @@
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
     coins, to_binary, Addr, BankMsg, Binary, BlockInfo, CosmosMsg, Decimal, Deps, DepsMut, Empty,
-    Env, MessageInfo, Order, Response, StdError, StdResult, WasmMsg,
+    Env, MessageInfo, Order, Response, StdError, StdResult, WasmMsg, GovMsg, VoteOption,
 };
 use cw2::set_contract_version;
 use cw3::{
@@ -66,8 +66,7 @@ pub fn migrate(
     // set the new version
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
-    WITHDRAWN_UNLOCKED.save(deps.storage, &0)?;
-    WITHDRAWN_LOCKED.save(deps.storage, &0)?;
+    // no state migration for 0.1.3
 
     Ok(Response::default())
 }
@@ -152,6 +151,9 @@ pub fn execute(
         }
         ExecuteMsg::ProposeEmergencyWithdraw { dst } => {
             execute_propose_emergency_withdraw(deps, env, info, dst)
+        }
+        ExecuteMsg::ProposeGovVote { gov_proposal_id, gov_vote } => {
+            execute_propose_gov_vote(deps, env, info, gov_proposal_id, gov_vote)
         }
         ExecuteMsg::VoteProposal { proposal_id } => execute_vote(deps, env, info, proposal_id),
         ExecuteMsg::ProcessProposal { proposal_id } => {
@@ -303,6 +305,24 @@ fn execute_propose_emergency_withdraw(
             msg: to_binary(&msg)?,
             funds: vec![],
         })],
+    )
+}
+
+fn execute_propose_gov_vote(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    gov_proposal_id: u64,
+    gov_vote: VoteOption,
+) -> Result<Response<Empty>, ContractError> {
+    let title = format!("voting {:?} for {}", gov_vote, gov_proposal_id);
+    let msg = GovMsg::Vote { proposal_id: gov_proposal_id, vote: gov_vote };
+    execute_propose(
+        deps,
+        env.clone(),
+        info.clone(),
+        title.clone(),
+        vec![CosmosMsg::Gov(msg)],
     )
 }
 
@@ -950,6 +970,28 @@ mod tests {
     }
 
     #[test]
+    fn test_propose_gov_vote_works() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let info = mock_info(VOTER1, &[]);
+        let proposal = ExecuteMsg::ProposeGovVote { gov_proposal_id: 1, gov_vote: VoteOption::Yes };
+        let res = execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
+
+        // Verify
+        assert_eq!(
+            res,
+            Response::new()
+                .add_attribute("action", "propose")
+                .add_attribute("sender", VOTER1)
+                .add_attribute("proposal_id", 1.to_string())
+                .add_attribute("status", "Open")
+        );
+    }
+
+    #[test]
     fn test_vote_works() {
         let mut deps = mock_dependencies();
 
@@ -1081,6 +1123,32 @@ mod tests {
         let err = execute(deps.as_mut(), mock_env(), info, process.clone()).unwrap_err();
 
         assert_eq!(err, ContractError::WrongExecuteStatus {});
+    }
+
+    #[test]
+    fn test_process_gov_vote_works() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let info = mock_info(VOTER1, &[]);
+        let proposal = ExecuteMsg::ProposeGovVote { gov_proposal_id: 1, gov_vote: VoteOption::Yes };
+        execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
+
+        let info = mock_info(VOTER2, &[]);
+        let vote2 = ExecuteMsg::VoteProposal { proposal_id: 1 };
+        execute(deps.as_mut(), mock_env(), info, vote2.clone()).unwrap();
+
+        let info = mock_info(VOTER3, &[]);
+        let vote3 = ExecuteMsg::VoteProposal { proposal_id: 1 };
+        execute(deps.as_mut(), mock_env(), info, vote3.clone()).unwrap();
+
+        let info = mock_info(VOTER3, &[]);
+        let process = ExecuteMsg::ProcessProposal { proposal_id: 1 };
+        let res = execute(deps.as_mut(), mock_env(), info, process.clone()).unwrap();
+
+        assert_eq!(1, res.messages.len());
     }
 
     #[test]
