@@ -1,1 +1,0 @@
-ebbf383e23705d2e56389b89df627a5cc2ac6702074408dd24b9f2916914e700  ./target/wasm32-unknown-unknown/release/gringotts.wasm
