@@ -1,5 +1,5 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{Addr, Timestamp};
+use cosmwasm_std::{Addr, Timestamp, VoteOption};
 use cw_utils::{Duration, Threshold};
 
 use crate::data_structure::Tranche;
@@ -43,6 +43,10 @@ pub enum ExecuteMsg {
     ProposeUpdateAdmin {
         admin: Addr,
         remove: bool,
+    },
+    ProposeGovVote {
+        gov_proposal_id: u64,
+        gov_vote: VoteOption,
     },
     VoteProposal {
         proposal_id: u64,
