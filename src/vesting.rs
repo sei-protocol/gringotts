@@ -37,6 +37,8 @@ pub fn total_vested_amount(storage: &dyn Storage, now: Timestamp) -> StdResult<u
     for i in 0..vesting_timestamps.len() {
         if vesting_timestamps[i] <= now {
             total_vested_amount += vesting_amounts[i];
+        } else {
+            break;
         }
     }
     Ok(total_vested_amount)

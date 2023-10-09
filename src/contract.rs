@@ -66,7 +66,7 @@ pub fn migrate(
     // set the new version
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
-    // no state migration for 0.1.3
+    // no state migration for 0.1.4
 
     Ok(Response::default())
 }
