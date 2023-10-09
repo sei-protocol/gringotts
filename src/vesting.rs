@@ -1,4 +1,4 @@
-use cosmwasm_std::{coins, BankMsg, Response, Storage, Timestamp};
+use cosmwasm_std::{coins, BankMsg, Response, Storage, Timestamp, StdResult};
 
 use crate::{
     state::{DENOM, UNLOCK_DISTRIBUTION_ADDRESS, VESTING_AMOUNTS, VESTING_TIMESTAMPS},
@@ -27,6 +27,18 @@ pub fn collect_vested(storage: &mut dyn Storage, now: Timestamp) -> Result<u128,
     VESTING_AMOUNTS.save(storage, &remaining_vesting_amounts)?;
     VESTING_TIMESTAMPS.save(storage, &remaining_vesting_ts)?;
 
+    Ok(total_vested_amount)
+}
+
+pub fn total_vested_amount(storage: &dyn Storage, now: Timestamp) -> StdResult<u128> {
+    let vesting_timestamps= VESTING_TIMESTAMPS.load(storage)?;
+    let vesting_amounts = VESTING_AMOUNTS.load(storage)?;
+    let mut total_vested_amount = 0u128;
+    for i in 0..vesting_timestamps.len() {
+        if vesting_timestamps[i] <= now {
+            total_vested_amount += vesting_amounts[i];
+        }
+    }
     Ok(total_vested_amount)
 }
 
