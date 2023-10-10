@@ -78,6 +78,8 @@ pub enum QueryMsg {
     Info {},
     #[returns(ShowConfigResponse)]
     Config {},
+    #[returns(ShowTotalVestedResponse)]
+    TotalVested {},
 }
 
 #[cw_serde]
@@ -106,4 +108,9 @@ pub struct ShowInfoResponse {
 pub struct ShowConfigResponse {
     pub max_voting_period: Duration,
     pub admin_voting_threshold: Threshold,
+}
+
+#[cw_serde]
+pub struct ShowTotalVestedResponse {
+    pub vested_amount: u128,
 }

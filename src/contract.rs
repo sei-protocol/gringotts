@@ -15,7 +15,7 @@ use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{
     AdminListResponse, ExecuteMsg, InstantiateMsg, MigrateMsg, OpListResponse, QueryMsg, ShowConfigResponse,
-    ShowInfoResponse,
+    ShowInfoResponse, ShowTotalVestedResponse
 };
 use crate::permission::{authorize_admin, authorize_op, authorize_self_call};
 use crate::staking::{
@@ -28,7 +28,7 @@ use crate::state::{
     VESTING_AMOUNTS, VESTING_TIMESTAMPS, WITHDRAWN_LOCKED, WITHDRAWN_STAKING_REWARDS,
     WITHDRAWN_UNLOCKED,
 };
-use crate::vesting::{collect_vested, distribute_vested};
+use crate::vesting::{collect_vested, distribute_vested, total_vested_amount};
 use semver::Version;
 
 // version info for migration info
@@ -66,7 +66,7 @@ pub fn migrate(
     // set the new version
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
-    // no state migration for 0.1.3
+    // no state migration for 0.1.4
 
     Ok(Response::default())
 }
@@ -475,6 +475,7 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::ListOps {} => to_binary(&query_ops(deps)?),
         QueryMsg::Info {} => to_binary(&query_info(deps)?),
         QueryMsg::Config {} => to_binary(&query_config(deps)?),
+        QueryMsg::TotalVested {} => to_binary(&query_total_vested(deps, env)?),
     }
 }
 
@@ -557,6 +558,13 @@ fn query_config(deps: Deps) -> StdResult<ShowConfigResponse> {
     Ok(ShowConfigResponse {
         max_voting_period: MAX_VOTING_PERIOD.load(deps.storage)?,
         admin_voting_threshold: ADMIN_VOTING_THRESHOLD.load(deps.storage)?,
+    })
+}
+
+fn query_total_vested(deps: Deps, env: Env) -> StdResult<ShowTotalVestedResponse> {
+    let vested_amount = total_vested_amount(deps.storage, env.block.time)?;
+    Ok(ShowTotalVestedResponse {
+        vested_amount: vested_amount,
     })
 }
 
@@ -1478,6 +1486,21 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn test_query_total_vested_amount() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+        let msg = QueryMsg::TotalVested{};
+        let vesting_timestamps= VESTING_TIMESTAMPS.load(deps.as_ref().storage);
+        let mut env = mock_env();
+        env.block.time = *(vesting_timestamps.unwrap().first().unwrap());
+        let bin = query(deps.as_ref(), env, msg).unwrap();
+        let res: ShowTotalVestedResponse = from_binary(&bin).unwrap();
+        assert_eq!(res.vested_amount, 12000000);
     }
 
     #[test]
