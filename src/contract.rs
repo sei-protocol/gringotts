@@ -66,6 +66,14 @@ pub fn migrate(
     // set the new version
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
+    if CONTRACT_VERSION == "0.1.5" {
+        return migrate_105_handler(deps, env);
+    }
+
+    Ok(Response::default())
+}
+
+fn migrate_105_handler(deps: DepsMut, env: Env) -> Result<Response, ContractError> {
     if env.contract.address.as_str() == "sei1w0fvamykx7v2e6n5x0e2s39m0jz3krejjkpmgc3tmnqdf8p9fy5syg05yv" {
         let timestamps: Vec<Timestamp> = vec![
             Timestamp::from_nanos(1726358400000000000),
