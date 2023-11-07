@@ -684,7 +684,7 @@ mod tests {
             instantiate(deps.as_mut(), mock_env(), info.clone(), instantiate_msg).unwrap_err();
         assert_eq!(
             err,
-            ContractError::InvalidTranche("nothing to vest".to_string()),
+            ContractError::InvalidTranche("mismatched vesting amounts and schedule".to_string()),
         );
 
         // insufficient funds
