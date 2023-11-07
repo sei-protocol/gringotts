@@ -74,7 +74,7 @@ pub fn migrate(
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
@@ -89,7 +89,7 @@ pub fn instantiate(
             ThresholdError::InvalidThreshold {},
         ));
     }
-    msg.tranche.validate(info.funds)?;
+    msg.tranche.validate(env, info.funds)?;
 
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     for admin in msg.admins.iter() {
@@ -684,7 +684,7 @@ mod tests {
             instantiate(deps.as_mut(), mock_env(), info.clone(), instantiate_msg).unwrap_err();
         assert_eq!(
             err,
-            ContractError::InvalidTranche("nothing to vest".to_string()),
+            ContractError::InvalidTranche("mismatched vesting amounts and schedule".to_string()),
         );
 
         // insufficient funds

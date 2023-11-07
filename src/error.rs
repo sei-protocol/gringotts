@@ -58,6 +58,7 @@ pub enum ContractError {
 
     #[error("Semver parsing error: {0}")]
     SemVer(String),
+
 }
 
 impl From<semver::Error> for ContractError {
