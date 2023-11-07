@@ -74,7 +74,7 @@ pub fn migrate(
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
@@ -89,7 +89,7 @@ pub fn instantiate(
             ThresholdError::InvalidThreshold {},
         ));
     }
-    msg.tranche.validate(info.funds)?;
+    msg.tranche.validate(env, info.funds)?;
 
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     for admin in msg.admins.iter() {

@@ -23,7 +23,6 @@ schemars = "0.8.1"
 serde = { version = "1.0.103", default-features = false, features = ["derive"] }
 thiserror = { version = "1.0.23" }
 semver = "1"
-chrono = "0.4"
 
 [dev-dependencies]
 cw20 = { version = "1.0.1" }
