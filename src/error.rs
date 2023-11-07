@@ -59,8 +59,6 @@ pub enum ContractError {
     #[error("Semver parsing error: {0}")]
     SemVer(String),
 
-    #[error("Invalid timestamp")]
-    InvalidTimestamp(String),
 }
 
 impl From<semver::Error> for ContractError {

@@ -71,7 +71,7 @@ impl Tranche {
 
             // ts should not be too far in the future (e.g. example not more than 100 years)
             if ts.seconds() > env.block.time.seconds() + HUNDRED_YEARS_IN_SECONDS {
-                return Err(ContractError::InvalidTimestamp(
+                return Err(ContractError::InvalidTranche(
                     "Timestamp is too far in the future".to_string(),
                 ));
             }
@@ -236,7 +236,7 @@ mod tests {
        let result = tranche.validate(env, funds);
        assert!(matches!(
            result,
-           Err(ContractError::InvalidTimestamp(msg)) if msg.contains("Timestamp is too far in the future")
+           Err(ContractError::InvalidTranche(msg)) if msg.contains("Timestamp is too far in the future")
        ));
   }
 }
