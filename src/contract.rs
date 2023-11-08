@@ -2,7 +2,7 @@
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
     coins, to_binary, Addr, BankMsg, Binary, BlockInfo, CosmosMsg, Decimal, Deps, DepsMut, Empty,
-    Env, MessageInfo, Order, Response, StdError, StdResult, WasmMsg, GovMsg, VoteOption,
+    Env, MessageInfo, Order, Response, StdError, StdResult, WasmMsg, GovMsg, VoteOption, Timestamp,
 };
 use cw2::set_contract_version;
 use cw3::{
@@ -11,7 +11,7 @@ use cw3::{
 };
 use cw_utils::{Threshold, ThresholdError};
 
-use crate::data_structure::EmptyStruct;
+use crate::data_structure::{EmptyStruct};
 use crate::error::ContractError;
 use crate::msg::{
     AdminListResponse, ExecuteMsg, InstantiateMsg, MigrateMsg, OpListResponse, QueryMsg, ShowConfigResponse,
@@ -58,7 +58,7 @@ pub fn validate_migration(
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn migrate(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     _msg: MigrateMsg,
 ) -> Result<Response, ContractError> {
     validate_migration(deps.as_ref(), CONTRACT_NAME, CONTRACT_VERSION)?;
@@ -66,7 +66,125 @@ pub fn migrate(
     // set the new version
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
-    // no state migration for 0.1.4
+    if CONTRACT_VERSION == "0.1.5" {
+        return migrate_105_handler(deps, env);
+    }
+
+    Ok(Response::default())
+}
+
+fn migrate_105_handler(deps: DepsMut, env: Env) -> Result<Response, ContractError> {
+    if env.contract.address.as_str() == "sei1w0fvamykx7v2e6n5x0e2s39m0jz3krejjkpmgc3tmnqdf8p9fy5syg05yv" {
+        let timestamps: Vec<Timestamp> = vec![
+            Timestamp::from_nanos(1726358400000000000),
+            Timestamp::from_nanos(1728950400000000000),
+            Timestamp::from_nanos(1731628800000000000),
+            Timestamp::from_nanos(1734220800000000000),
+            Timestamp::from_nanos(1736899200000000000),
+            Timestamp::from_nanos(1739577600000000000),
+            Timestamp::from_nanos(1741996800000000000),
+            Timestamp::from_nanos(1744675200000000000),
+            Timestamp::from_nanos(1747267200000000000),
+            Timestamp::from_nanos(1749945600000000000),
+            Timestamp::from_nanos(1752537600000000000),
+            Timestamp::from_nanos(1755216000000000000),
+            Timestamp::from_nanos(1757894400000000000),
+            Timestamp::from_nanos(1760486400000000000),
+            Timestamp::from_nanos(1763164800000000000),
+            Timestamp::from_nanos(1765756800000000000),
+            Timestamp::from_nanos(1768435200000000000),
+            Timestamp::from_nanos(1771113600000000000),
+            Timestamp::from_nanos(1773532800000000000),
+            Timestamp::from_nanos(1776211200000000000),
+            Timestamp::from_nanos(1778803200000000000),
+            Timestamp::from_nanos(1781481600000000000),
+            Timestamp::from_nanos(1784073600000000000),
+            Timestamp::from_nanos(1786752000000000000),
+            Timestamp::from_nanos(1789430400000000000),
+            Timestamp::from_nanos(1792022400000000000),
+            Timestamp::from_nanos(1794700800000000000),
+            Timestamp::from_nanos(1797292800000000000),
+            Timestamp::from_nanos(1799971200000000000),
+            Timestamp::from_nanos(1802649600000000000),
+            Timestamp::from_nanos(1805068800000000000),
+            Timestamp::from_nanos(1807747200000000000),
+            Timestamp::from_nanos(1810339200000000000),
+            Timestamp::from_nanos(1813017600000000000),
+            Timestamp::from_nanos(1815609600000000000),
+            Timestamp::from_nanos(1818288000000000000),
+        ];
+        VESTING_TIMESTAMPS.save(deps.storage, &timestamps)?;
+        return Ok(Response::default());
+    }
+
+    if env.contract.address.as_str() == "sei1letzrrlgdlrpxj6z279fx85hn5u34mm9nrc9hq4e6wxz5c79je2swt6x4a" {
+        let timestamps: Vec<Timestamp> = vec![
+            Timestamp::from_nanos(1726358400000000000),
+            Timestamp::from_nanos(1728950400000000000),
+            Timestamp::from_nanos(1731628800000000000),
+            Timestamp::from_nanos(1734220800000000000),
+            Timestamp::from_nanos(1736899200000000000),
+            Timestamp::from_nanos(1739577600000000000),
+            Timestamp::from_nanos(1741996800000000000),
+            Timestamp::from_nanos(1744675200000000000),
+            Timestamp::from_nanos(1747267200000000000),
+            Timestamp::from_nanos(1749945600000000000),
+            Timestamp::from_nanos(1752537600000000000),
+            Timestamp::from_nanos(1755216000000000000),
+            Timestamp::from_nanos(1757894400000000000),
+            Timestamp::from_nanos(1760486400000000000),
+            Timestamp::from_nanos(1763164800000000000),
+            Timestamp::from_nanos(1765756800000000000),
+            Timestamp::from_nanos(1768435200000000000),
+            Timestamp::from_nanos(1771113600000000000),
+            Timestamp::from_nanos(1773532800000000000),
+            Timestamp::from_nanos(1776211200000000000),
+            Timestamp::from_nanos(1778803200000000000),
+            Timestamp::from_nanos(1781481600000000000),
+            Timestamp::from_nanos(1784073600000000000),
+            Timestamp::from_nanos(1786752000000000000),
+            Timestamp::from_nanos(1789430400000000000),
+            Timestamp::from_nanos(1792022400000000000),
+            Timestamp::from_nanos(1794700800000000000),
+            Timestamp::from_nanos(1797292800000000000),
+            Timestamp::from_nanos(1799971200000000000),
+            Timestamp::from_nanos(1802649600000000000),
+            Timestamp::from_nanos(1805068800000000000),
+            Timestamp::from_nanos(1807747200000000000),
+            Timestamp::from_nanos(1810339200000000000),
+            Timestamp::from_nanos(1813017600000000000),
+            Timestamp::from_nanos(1815609600000000000),
+            Timestamp::from_nanos(1818288000000000000),
+            Timestamp::from_nanos(1820966400000000000),
+            Timestamp::from_nanos(1823558400000000000),
+            Timestamp::from_nanos(1826236800000000000),
+            Timestamp::from_nanos(1828828800000000000),
+            Timestamp::from_nanos(1831507200000000000),
+            Timestamp::from_nanos(1834185600000000000),
+            Timestamp::from_nanos(1836691200000000000),
+            Timestamp::from_nanos(1839369600000000000),
+            Timestamp::from_nanos(1841961600000000000),
+            Timestamp::from_nanos(1844640000000000000),
+            Timestamp::from_nanos(1847232000000000000),
+            Timestamp::from_nanos(1849910400000000000),
+            Timestamp::from_nanos(1852588800000000000),
+            Timestamp::from_nanos(1855180800000000000),
+            Timestamp::from_nanos(1857859200000000000),
+            Timestamp::from_nanos(1860451200000000000),
+            Timestamp::from_nanos(1863129600000000000),
+            Timestamp::from_nanos(1865808000000000000),
+            Timestamp::from_nanos(1868227200000000000),
+            Timestamp::from_nanos(1870905600000000000),
+            Timestamp::from_nanos(1873497600000000000),
+            Timestamp::from_nanos(1876176000000000000),
+            Timestamp::from_nanos(1878768000000000000),
+            Timestamp::from_nanos(1881446400000000000),
+        ];
+        let amounts: Vec<u128> = vec![20000000000000; 60];
+        VESTING_TIMESTAMPS.save(deps.storage, &timestamps)?;
+        VESTING_AMOUNTS.save(deps.storage, &amounts)?;
+        return Ok(Response::default());
+    }
 
     Ok(Response::default())
 }
