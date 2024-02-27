@@ -1,8 +1,7 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    coins, to_binary, Addr, BankMsg, Binary, BlockInfo, CosmosMsg, Decimal, Deps, DepsMut, Empty,
-    Env, MessageInfo, Order, Response, StdError, StdResult, WasmMsg, GovMsg, VoteOption, Timestamp,
+    coins, to_binary, Addr, BankMsg, Binary, BlockInfo, CosmosMsg, Decimal, Delegation, Deps, DepsMut, Empty, Env, GovMsg, MessageInfo, Order, Response, StdError, StdResult, Timestamp, VoteOption, WasmMsg
 };
 use cw2::set_contract_version;
 use cw3::{
@@ -346,7 +345,11 @@ fn execute_initiate_withdraw_reward(
 ) -> Result<Response<Empty>, ContractError> {
     authorize_op(deps.storage, info.sender)?;
     let mut response = Response::new();
-    let mut total = 0u128;
+    let mut total = calculate_withdrawn_rewards(deps.as_ref(), env.clone())?;
+    response = response.add_message(BankMsg::Send {
+        to_address: STAKING_REWARD_ADDRESS.load(deps.storage)?.to_string(),
+        amount: coins(total, DENOM.load(deps.storage)?),
+    });
     for validator in get_all_delegated_validators(deps.as_ref(), env.clone())? {
         let withdrawable_amount =
             get_delegation_rewards(deps.as_ref(), env.clone(), validator.clone())?;
@@ -358,6 +361,33 @@ fn execute_initiate_withdraw_reward(
         Ok(old + total)
     })?;
     Ok(response)
+}
+
+// rewards may be automatically withdrawn to contract's bank balance during redelegation/undelegation/delegating
+// more to the same validator. The amount of such withdrawn rewards, assuming no external deposit to the contract
+// is present, can be calculated as: bank balance - (total - withdrawn principal - staked - unbonding).
+// Note that because CW currently doesn't support querying unbonding amount, we will ignore unbonding amount in the
+// calculationg for now. This would make under-withdraw possible but still impossible to over-withdraw (which is bad).
+// To avoid under-withdraw, the operator can wait till there is no unbonding amount for the contract when executing
+// rewards withdrawal.
+fn calculate_withdrawn_rewards(deps: Deps, env: Env) -> Result<u128, ContractError> {
+    let bank_balance = deps.querier.query_balance(env.contract.address.clone(), DENOM.load(deps.storage)?)?.amount.u128();
+    let total_locked: u128 = VESTING_AMOUNTS.load(deps.storage)?.iter().sum();
+    let withdrawn_principal = WITHDRAWN_LOCKED.load(deps.storage)? + WITHDRAWN_UNLOCKED.load(deps.storage)?;
+    let staked: u128 = deps.querier.query_all_delegations(env.contract.address)?.iter().map(|del: &Delegation| -> u128 {
+        if del.amount.clone().denom != DENOM.load(deps.storage).unwrap() {
+            return 0;
+        }
+        del.amount.amount.u128()
+    }).sum();
+    let mut principal_in_bank: u128 = 0;
+    if withdrawn_principal + staked < total_locked {
+        principal_in_bank = total_locked - withdrawn_principal - staked;
+    }
+    if principal_in_bank < bank_balance {
+        return Ok(bank_balance - principal_in_bank);
+    }
+    Ok(0)
 }
 
 fn execute_update_op(
@@ -989,15 +1019,17 @@ mod tests {
                 },
             ],
         );
+        // principal: 48000000 - 1500000 (delegations). Withdrawn rewards: 100
+        deps.querier.update_balance(mock_env().contract.address.clone(), vec![Coin::new(48000000 - 1500000 + 100, "usei")]);
 
         let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let msg = ExecuteMsg::InitiateWithdrawReward {};
         let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
-        assert_eq!(4, res.messages.len());
+        assert_eq!(5, res.messages.len());
         assert_eq!(
-            35,
+            35 + 100,
             WITHDRAWN_STAKING_REWARDS
                 .load(deps.as_ref().storage)
                 .unwrap()
