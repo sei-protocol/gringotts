@@ -346,10 +346,12 @@ fn execute_initiate_withdraw_reward(
     authorize_op(deps.storage, info.sender)?;
     let mut response = Response::new();
     let mut total = calculate_withdrawn_rewards(deps.as_ref(), env.clone())?;
-    response = response.add_message(BankMsg::Send {
-        to_address: STAKING_REWARD_ADDRESS.load(deps.storage)?.to_string(),
-        amount: coins(total, DENOM.load(deps.storage)?),
-    });
+    if total > 0 {
+        response = response.add_message(BankMsg::Send {
+            to_address: STAKING_REWARD_ADDRESS.load(deps.storage)?.to_string(),
+            amount: coins(total, DENOM.load(deps.storage)?),
+        });
+    }
     for validator in get_all_delegated_validators(deps.as_ref(), env.clone())? {
         let withdrawable_amount =
             get_delegation_rewards(deps.as_ref(), env.clone(), validator.clone())?;
