@@ -1,3 +1,6 @@
+# 0.1.6
+- withdraw already-withdrawn rewards (as a result of re/undelegation) in the withdraw staking reward execute endpoint
+
 # 0.1.5
 - Add validations for timestamp in tranche: earliest must be later than current block time and latest must be within 100 years
 - Fix validation that enforces equal timestamp and amount size
