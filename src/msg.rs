@@ -44,6 +44,12 @@ pub enum ExecuteMsg {
         admin: Addr,
         remove: bool,
     },
+    ProposeUpdateUnlockedDistributionAddress {
+        unlocked_distribution_address: Addr,
+    },
+    ProposeUpdateStakingRewardDistributionAddress {
+        staking_reward_distribution_address: Addr,
+    },
     ProposeGovVote {
         gov_proposal_id: u64,
         gov_vote: VoteOption,
@@ -57,6 +63,12 @@ pub enum ExecuteMsg {
     InternalUpdateAdmin {
         admin: Addr,
         remove: bool,
+    },
+    InternalUpdateUnlockedDistributionAddress {
+        unlocked_distribution_address: Addr,
+    },
+    InternalUpdateStakingRewardDistributionAddress {
+        staking_reward_distribution_address: Addr,
     },
     InternalWithdrawLocked {
         dst: Addr,

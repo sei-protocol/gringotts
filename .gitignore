@@ -7,3 +7,4 @@
 *.wasm
 hash.txt
 contracts.txt
+.idea/
