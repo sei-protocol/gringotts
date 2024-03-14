@@ -1,3 +1,5 @@
+#0.1.7
+- Add msgs for updating unlocked distribution address and staking rewards distribution address
 # 0.1.6
 - withdraw already-withdrawn rewards (as a result of re/undelegation) in the withdraw staking reward execute endpoint
 

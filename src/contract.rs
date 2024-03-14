@@ -266,6 +266,12 @@ pub fn execute(
         ExecuteMsg::ProposeUpdateAdmin { admin, remove } => {
             execute_propose_update_admin(deps, env, info, admin, remove)
         }
+        ExecuteMsg::ProposeUpdateUnlockedDistributionAddress {unlocked_distribution_address } => {
+            execute_propose_update_unlocked_distribution_address(deps, env, info, unlocked_distribution_address)
+        }
+        ExecuteMsg::ProposeUpdateStakingRewardDistributionAddress {staking_reward_distribution_address } => {
+            execute_propose_update_staking_reward_distribution_address(deps, env, info, staking_reward_distribution_address)
+        }
         ExecuteMsg::ProposeEmergencyWithdraw { dst } => {
             execute_propose_emergency_withdraw(deps, env, info, dst)
         }
@@ -278,6 +284,12 @@ pub fn execute(
         }
         ExecuteMsg::InternalUpdateAdmin { admin, remove } => {
             execute_internal_update_admin(deps, env, info, admin, remove)
+        }
+        ExecuteMsg::InternalUpdateUnlockedDistributionAddress { unlocked_distribution_address } => {
+            execute_internal_update_unlocked_distribution_address(deps, env, info, unlocked_distribution_address)
+        }
+        ExecuteMsg::InternalUpdateStakingRewardDistributionAddress {staking_reward_distribution_address } => {
+            execute_internal_update_staking_reward_distribution_address(deps, env, info, staking_reward_distribution_address)
         }
         ExecuteMsg::InternalWithdrawLocked { dst } => {
             execute_internal_withdraw_locked(deps, env, info, dst)
@@ -424,6 +436,52 @@ fn execute_propose_update_admin(
     } else {
         title = format!("add {}", admin.to_string());
     }
+    execute_propose(
+        deps,
+        env.clone(),
+        info.clone(),
+        title.clone(),
+        vec![CosmosMsg::Wasm(WasmMsg::Execute {
+            contract_addr: env.contract.address.to_string(),
+            msg: to_binary(&msg)?,
+            funds: vec![],
+        })],
+    )
+}
+
+fn execute_propose_update_unlocked_distribution_address(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    unlocked_distribution_address: Addr,
+) -> Result<Response<Empty>, ContractError> {
+    let msg = ExecuteMsg::InternalUpdateUnlockedDistributionAddress {
+        unlocked_distribution_address: unlocked_distribution_address.clone(),
+    };
+    let title = format!("updating unlocked distribution address {}", unlocked_distribution_address.to_string());
+    execute_propose(
+        deps,
+        env.clone(),
+        info.clone(),
+        title.clone(),
+        vec![CosmosMsg::Wasm(WasmMsg::Execute {
+            contract_addr: env.contract.address.to_string(),
+            msg: to_binary(&msg)?,
+            funds: vec![],
+        })],
+    )
+}
+
+fn execute_propose_update_staking_reward_distribution_address(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    staking_reward_distribution_address: Addr,
+) -> Result<Response<Empty>, ContractError> {
+    let msg = ExecuteMsg::InternalUpdateStakingRewardDistributionAddress {
+        staking_reward_distribution_address: staking_reward_distribution_address.clone(),
+    };
+    let title = format!("updating staking reward distribution address {}", staking_reward_distribution_address.to_string());
     execute_propose(
         deps,
         env.clone(),
@@ -597,6 +655,28 @@ fn execute_internal_update_admin(
     Ok(Response::new())
 }
 
+fn execute_internal_update_unlocked_distribution_address(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    unlocked_distribution_address: Addr,
+) -> Result<Response<Empty>, ContractError> {
+    authorize_self_call(env, info)?;
+    UNLOCK_DISTRIBUTION_ADDRESS.save(deps.storage, &unlocked_distribution_address);
+    Ok(Response::new())
+}
+
+fn execute_internal_update_staking_reward_distribution_address(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    staking_reward_distribution_address: Addr,
+) -> Result<Response<Empty>, ContractError> {
+    authorize_self_call(env, info)?;
+    STAKING_REWARD_ADDRESS.save(deps.storage, &staking_reward_distribution_address);
+    Ok(Response::new())
+}
+
 fn execute_internal_withdraw_locked(
     deps: DepsMut,
     env: Env,
@@ -720,11 +800,12 @@ fn query_total_vested(deps: Deps, env: Env) -> StdResult<ShowTotalVestedResponse
 
 #[cfg(test)]
 mod tests {
-    use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{from_binary, Addr, Coin, Decimal, FullDelegation, Timestamp, Validator};
+    use cosmwasm_std::testing::{MOCK_CONTRACT_ADDR, mock_dependencies, mock_env, mock_info};
+    use cosmwasm_std::{from_binary, Addr, Coin, Decimal, FullDelegation, Timestamp, Validator, Storage};
 
     use cw2::{get_contract_version, ContractVersion};
     use cw_utils::{Duration, Expiration, ThresholdResponse};
+    use schemars::_private::NoSerialize;
 
     use crate::data_structure::Tranche;
     use crate::state::get_number_of_ops;
@@ -1057,8 +1138,9 @@ mod tests {
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let info = mock_info(VOTER1, &[]);
+        let new_admin = Addr::unchecked("new_admin1");
         let proposal = ExecuteMsg::ProposeUpdateAdmin {
-            admin: Addr::unchecked("new_admin1"),
+            admin: new_admin.clone(),
             remove: false,
         };
         let res = execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
@@ -1072,6 +1154,19 @@ mod tests {
                 .add_attribute("proposal_id", 1.to_string())
                 .add_attribute("status", "Open")
         );
+
+        // Verify admin has updated after internal call
+        let internal_update = ExecuteMsg::InternalUpdateAdmin {
+            admin: new_admin.clone(),
+            remove: false
+        };
+        let internal_info = mock_info(MOCK_CONTRACT_ADDR, &[]);
+        execute(deps.as_mut(), mock_env(), internal_info, internal_update.clone());
+        let result = match ADMINS.load(deps.as_ref().storage, &Addr::unchecked(new_admin.clone())) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(ContractError::Unauthorized {}),
+        };
+        assert_eq!(result, Ok(()))
     }
 
     #[test]
@@ -1088,6 +1183,72 @@ mod tests {
         };
         let err = execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap_err();
         assert_eq!(err, ContractError::Unauthorized {});
+    }
+
+    #[test]
+    fn test_propose_update_unlocked_distribution_address_works() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let info = mock_info(VOTER1, &[]);
+        let new_addr = Addr::unchecked("new_unlock1");
+        let proposal = ExecuteMsg::ProposeUpdateUnlockedDistributionAddress {
+            unlocked_distribution_address: new_addr.clone(),
+        };
+        let res = execute(deps.as_mut(), mock_env(), info.clone(), proposal.clone()).unwrap();
+
+        // Verify
+        assert_eq!(
+            res,
+            Response::new()
+                .add_attribute("action", "propose")
+                .add_attribute("sender", VOTER1)
+                .add_attribute("proposal_id", 1.to_string())
+                .add_attribute("status", "Open")
+        );
+
+        // Verify address has updated after internal call
+        let internal_update = ExecuteMsg::InternalUpdateUnlockedDistributionAddress {
+            unlocked_distribution_address: new_addr.clone()
+        };
+        let internal_info = mock_info(MOCK_CONTRACT_ADDR, &[]);
+        execute(deps.as_mut(), mock_env(), internal_info, internal_update.clone());
+        assert_eq!(UNLOCK_DISTRIBUTION_ADDRESS.load(deps.as_ref().storage).unwrap(), new_addr);
+    }
+
+    #[test]
+    fn test_propose_update_stakign_reward_distribution_address_works() {
+        let mut deps = mock_dependencies();
+
+        let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let info = mock_info(VOTER1, &[]);
+        let new_addr = Addr::unchecked("new_staking1");
+        let proposal = ExecuteMsg::ProposeUpdateStakingRewardDistributionAddress {
+            staking_reward_distribution_address: new_addr.clone(),
+        };
+        let res = execute(deps.as_mut(), mock_env(), info.clone(), proposal.clone()).unwrap();
+
+        // Verify
+        assert_eq!(
+            res,
+            Response::new()
+                .add_attribute("action", "propose")
+                .add_attribute("sender", VOTER1)
+                .add_attribute("proposal_id", 1.to_string())
+                .add_attribute("status", "Open")
+        );
+
+        // Verify address has updated after internal call
+        let internal_update = ExecuteMsg::InternalUpdateStakingRewardDistributionAddress {
+            staking_reward_distribution_address: new_addr.clone()
+        };
+        let internal_info = mock_info(MOCK_CONTRACT_ADDR, &[]);
+        execute(deps.as_mut(), mock_env(), internal_info, internal_update.clone());
+        assert_eq!(STAKING_REWARD_ADDRESS.load(deps.as_ref().storage).unwrap(), new_addr);
     }
 
     #[test]
