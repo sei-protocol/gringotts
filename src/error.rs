@@ -59,6 +59,8 @@ pub enum ContractError {
     #[error("Semver parsing error: {0}")]
     SemVer(String),
 
+    #[error("No sufficient vested amount")]
+    NoSufficientUnlockedTokens {},
 }
 
 impl From<semver::Error> for ContractError {

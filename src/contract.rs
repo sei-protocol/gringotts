@@ -10,7 +10,7 @@ use cw3::{
 };
 use cw_utils::{Threshold, ThresholdError};
 
-use crate::data_structure::{EmptyStruct};
+use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{
     AdminListResponse, ExecuteMsg, InstantiateMsg, MigrateMsg, OpListResponse, QueryMsg, ShowConfigResponse,
@@ -258,8 +258,8 @@ pub fn execute(
         ExecuteMsg::Undelegate { validator, amount } => {
             execute_undelegate(deps.as_ref(), info, validator, amount)
         }
-        ExecuteMsg::InitiateWithdrawUnlocked {} => {
-            execute_initiate_withdraw_unlocked(deps, env, info)
+        ExecuteMsg::InitiateWithdrawUnlocked { amount } => {
+            execute_initiate_withdraw_unlocked(deps, env, info, amount)
         }
         ExecuteMsg::UpdateOp { op, remove } => execute_update_op(deps, info, op, remove),
         ExecuteMsg::InitiateWithdrawReward {} => execute_initiate_withdraw_reward(deps, env, info),
@@ -341,9 +341,10 @@ fn execute_initiate_withdraw_unlocked(
     deps: DepsMut,
     env: Env,
     info: MessageInfo,
+    amount: u128,
 ) -> Result<Response<Empty>, ContractError> {
     authorize_op(deps.storage, info.sender)?;
-    let vested_amount = collect_vested(deps.storage, env.block.time)?;
+    let vested_amount = collect_vested(deps.storage, env.block.time, amount)?;
     WITHDRAWN_UNLOCKED.update(deps.storage, |old| -> Result<u128, StdError> {
         Ok(old + vested_amount)
     })?;
@@ -662,7 +663,7 @@ fn execute_internal_update_unlocked_distribution_address(
     unlocked_distribution_address: Addr,
 ) -> Result<Response<Empty>, ContractError> {
     authorize_self_call(env, info)?;
-    UNLOCK_DISTRIBUTION_ADDRESS.save(deps.storage, &unlocked_distribution_address);
+    UNLOCK_DISTRIBUTION_ADDRESS.save(deps.storage, &unlocked_distribution_address)?;
     Ok(Response::new())
 }
 
@@ -673,7 +674,7 @@ fn execute_internal_update_staking_reward_distribution_address(
     staking_reward_distribution_address: Addr,
 ) -> Result<Response<Empty>, ContractError> {
     authorize_self_call(env, info)?;
-    STAKING_REWARD_ADDRESS.save(deps.storage, &staking_reward_distribution_address);
+    STAKING_REWARD_ADDRESS.save(deps.storage, &staking_reward_distribution_address)?;
     Ok(Response::new())
 }
 
@@ -801,11 +802,10 @@ fn query_total_vested(deps: Deps, env: Env) -> StdResult<ShowTotalVestedResponse
 #[cfg(test)]
 mod tests {
     use cosmwasm_std::testing::{MOCK_CONTRACT_ADDR, mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{from_binary, Addr, Coin, Decimal, FullDelegation, Timestamp, Validator, Storage};
+    use cosmwasm_std::{from_binary, Addr, Coin, Decimal, FullDelegation, Timestamp, Validator};
 
     use cw2::{get_contract_version, ContractVersion};
     use cw_utils::{Duration, Expiration, ThresholdResponse};
-    use schemars::_private::NoSerialize;
 
     use crate::data_structure::Tranche;
     use crate::state::get_number_of_ops;
@@ -1035,7 +1035,7 @@ mod tests {
         let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
-        let msg = ExecuteMsg::InitiateWithdrawUnlocked {};
+        let msg = ExecuteMsg::InitiateWithdrawUnlocked { amount: 12000000 };
         let mut env = mock_env();
         let mut block = env.block;
         block.time = block.time.plus_seconds(31536000);
@@ -1055,7 +1055,7 @@ mod tests {
         let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
-        let msg = ExecuteMsg::InitiateWithdrawUnlocked {};
+        let msg = ExecuteMsg::InitiateWithdrawUnlocked { amount: 12000000};
         let mut env = mock_env();
         let mut block = env.block;
         block.time = block.time.plus_seconds(31536000);
@@ -1161,7 +1161,7 @@ mod tests {
             remove: false
         };
         let internal_info = mock_info(MOCK_CONTRACT_ADDR, &[]);
-        execute(deps.as_mut(), mock_env(), internal_info, internal_update.clone());
+        execute(deps.as_mut(), mock_env(), internal_info, internal_update.clone()).unwrap();
         let result = match ADMINS.load(deps.as_ref().storage, &Addr::unchecked(new_admin.clone())) {
             Ok(_) => Ok(()),
             Err(_) => Err(ContractError::Unauthorized {}),
@@ -1214,7 +1214,7 @@ mod tests {
             unlocked_distribution_address: new_addr.clone()
         };
         let internal_info = mock_info(MOCK_CONTRACT_ADDR, &[]);
-        execute(deps.as_mut(), mock_env(), internal_info, internal_update.clone());
+        execute(deps.as_mut(), mock_env(), internal_info, internal_update.clone()).unwrap();
         assert_eq!(UNLOCK_DISTRIBUTION_ADDRESS.load(deps.as_ref().storage).unwrap(), new_addr);
     }
 
@@ -1247,7 +1247,7 @@ mod tests {
             staking_reward_distribution_address: new_addr.clone()
         };
         let internal_info = mock_info(MOCK_CONTRACT_ADDR, &[]);
-        execute(deps.as_mut(), mock_env(), internal_info, internal_update.clone());
+        execute(deps.as_mut(), mock_env(), internal_info, internal_update.clone()).unwrap();
         assert_eq!(STAKING_REWARD_ADDRESS.load(deps.as_ref().storage).unwrap(), new_addr);
     }
 

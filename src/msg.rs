@@ -31,7 +31,9 @@ pub enum ExecuteMsg {
         validator: String,
         amount: u128,
     },
-    InitiateWithdrawUnlocked {},
+    InitiateWithdrawUnlocked {
+        amount: u128,
+    },
     InitiateWithdrawReward {},
     UpdateOp {
         op: Addr,
