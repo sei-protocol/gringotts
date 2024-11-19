@@ -25,7 +25,7 @@ use crate::state::{
     get_number_of_admins, next_proposal_id, ADMINS, ADMIN_VOTING_THRESHOLD, BALLOTS, DENOM,
     MAX_VOTING_PERIOD, OPS, PROPOSALS, STAKING_REWARD_ADDRESS, UNLOCK_DISTRIBUTION_ADDRESS,
     VESTING_AMOUNTS, VESTING_TIMESTAMPS, WITHDRAWN_LOCKED, WITHDRAWN_STAKING_REWARDS,
-    WITHDRAWN_UNLOCKED,
+    WITHDRAWN_UNLOCKED, TOTAL_AMOUNT,
 };
 use crate::vesting::{collect_vested, distribute_vested, total_vested_amount};
 use semver::Version;
@@ -67,6 +67,10 @@ pub fn migrate(
 
     if CONTRACT_VERSION == "0.1.5" {
         return migrate_105_handler(deps, env);
+    }
+
+    if CONTRACT_VERSION == "0.1.9" {
+        return migrate_109_handler(deps, env);
     }
 
     Ok(Response::default())
@@ -188,6 +192,28 @@ fn migrate_105_handler(deps: DepsMut, env: Env) -> Result<Response, ContractErro
     Ok(Response::default())
 }
 
+fn migrate_109_handler(deps: DepsMut, env: Env) -> Result<Response, ContractError> {
+    // foundation
+    if env.contract.address.as_str() == "sei19se8ass0qvpa2cc60ehnv5dtccznnn5m505cug5tg2gwsjqw5drqm5ptnx" {
+        let total_amount = 700_000_000_000_000_u128; // 700M SEI
+        TOTAL_AMOUNT.save(deps.storage, &total_amount)?; 
+        let total_delegations = 530871446501692_u128;
+        let withdrawn_unlocked = 139962026461886_u128;
+        let principal_in_bank = total_amount - withdrawn_unlocked - total_delegations;
+        let old_bank_balance = 53994946773281_u128;
+        let correct_withdrawn_rewards = old_bank_balance - principal_in_bank;
+        let delta = old_bank_balance - correct_withdrawn_rewards; // = principal_in_bank, just for readability
+        WITHDRAWN_STAKING_REWARDS.update(deps.storage, |old| -> Result<u128, StdError> {
+            Ok(old - delta)
+        })?;
+        // only necessary if we don't refund back to the contract
+        WITHDRAWN_UNLOCKED.update(deps.storage, |old| -> Result<u128, StdError> {
+            Ok(old + delta)
+        })?;
+    }
+    Ok(Response::default())
+}
+
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
@@ -218,6 +244,7 @@ pub fn instantiate(
     DENOM.save(deps.storage, &msg.tranche.denom)?;
     VESTING_TIMESTAMPS.save(deps.storage, &msg.tranche.vesting_timestamps)?;
     VESTING_AMOUNTS.save(deps.storage, &msg.tranche.vesting_amounts)?;
+    TOTAL_AMOUNT.save(deps.storage, msg.tranche.vesting_amounts.iter().sum())?;
     UNLOCK_DISTRIBUTION_ADDRESS.save(
         deps.storage,
         &msg.tranche.unlocked_token_distribution_address,
@@ -387,7 +414,7 @@ fn execute_initiate_withdraw_reward(
 // rewards withdrawal.
 fn calculate_withdrawn_rewards(deps: Deps, env: Env) -> Result<u128, ContractError> {
     let bank_balance = deps.querier.query_balance(env.contract.address.clone(), DENOM.load(deps.storage)?)?.amount.u128();
-    let total_locked: u128 = VESTING_AMOUNTS.load(deps.storage)?.iter().sum();
+    let total_locked: u128 = TOTAL_AMOUNT.load(deps.storage)?;
     let withdrawn_principal = WITHDRAWN_LOCKED.load(deps.storage)? + WITHDRAWN_UNLOCKED.load(deps.storage)?;
     let staked: u128 = deps.querier.query_all_delegations(env.contract.address)?.iter().map(|del: &Delegation| -> u128 {
         if del.amount.clone().denom != DENOM.load(deps.storage).unwrap() {
