@@ -1,11 +1,15 @@
-use cosmwasm_std::{coins, BankMsg, Response, Storage, Timestamp, StdResult};
+use cosmwasm_std::{coins, BankMsg, Response, StdResult, Storage, Timestamp};
 
 use crate::{
     state::{DENOM, UNLOCK_DISTRIBUTION_ADDRESS, VESTING_AMOUNTS, VESTING_TIMESTAMPS},
     ContractError,
 };
 
-pub fn collect_vested(storage: &mut dyn Storage, now: Timestamp, requested_amount: u128) -> Result<u128, ContractError> {
+pub fn collect_vested(
+    storage: &mut dyn Storage,
+    now: Timestamp,
+    requested_amount: u128,
+) -> Result<u128, ContractError> {
     let vesting_ts = VESTING_TIMESTAMPS.load(storage)?;
     let vesting_amounts = VESTING_AMOUNTS.load(storage)?;
     let mut vested_amount = 0u128;
@@ -28,7 +32,7 @@ pub fn collect_vested(storage: &mut dyn Storage, now: Timestamp, requested_amoun
         remaining_first_idx = i + 1;
     }
     if vested_amount < requested_amount {
-        return Err(ContractError::NoSufficientUnlockedTokens{});
+        return Err(ContractError::NoSufficientUnlockedTokens {});
     }
     if remaining_first_idx >= vesting_amounts.len() {
         VESTING_AMOUNTS.save(storage, &vec![])?;
@@ -47,7 +51,7 @@ pub fn collect_vested(storage: &mut dyn Storage, now: Timestamp, requested_amoun
 }
 
 pub fn total_vested_amount(storage: &dyn Storage, now: Timestamp) -> StdResult<u128> {
-    let vesting_timestamps= VESTING_TIMESTAMPS.load(storage)?;
+    let vesting_timestamps = VESTING_TIMESTAMPS.load(storage)?;
     let vesting_amounts = VESTING_AMOUNTS.load(storage)?;
     let mut total_vested_amount = 0u128;
     for i in 0..vesting_timestamps.len() {
@@ -96,7 +100,10 @@ mod tests {
         VESTING_AMOUNTS.save(deps_mut.storage, &vec![]).unwrap();
 
         assert_eq!(0, collect_vested(deps_mut.storage, now, 0).unwrap());
-        assert_eq!(ContractError::NoSufficientUnlockedTokens {}, collect_vested(deps_mut.storage, now, 10).expect_err("should error"));
+        assert_eq!(
+            ContractError::NoSufficientUnlockedTokens {},
+            collect_vested(deps_mut.storage, now, 10).expect_err("should error")
+        );
     }
 
     #[test]
@@ -124,8 +131,14 @@ mod tests {
             .unwrap();
         VESTING_AMOUNTS.save(deps_mut.storage, &vec![10]).unwrap();
 
-        assert_eq!(ContractError::NoSufficientUnlockedTokens {}, collect_vested(deps_mut.storage, now, 15).expect_err("should error"));
-        assert_eq!(VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(), vec![now]);
+        assert_eq!(
+            ContractError::NoSufficientUnlockedTokens {},
+            collect_vested(deps_mut.storage, now, 15).expect_err("should error")
+        );
+        assert_eq!(
+            VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(),
+            vec![now]
+        );
         assert_eq!(VESTING_AMOUNTS.load(deps_mut.storage).unwrap(), vec![10]);
     }
 
@@ -140,7 +153,10 @@ mod tests {
         VESTING_AMOUNTS.save(deps_mut.storage, &vec![10]).unwrap();
 
         assert_eq!(5, collect_vested(deps_mut.storage, now, 5).unwrap());
-        assert_eq!(VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(), vec![now]);
+        assert_eq!(
+            VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(),
+            vec![now]
+        );
         assert_eq!(VESTING_AMOUNTS.load(deps_mut.storage).unwrap(), vec![5]);
     }
 
@@ -154,7 +170,10 @@ mod tests {
             .unwrap();
         VESTING_AMOUNTS.save(deps_mut.storage, &vec![10]).unwrap();
 
-        assert_eq!(ContractError::NoSufficientUnlockedTokens {}, collect_vested(deps_mut.storage, now, 10).expect_err("should error"));
+        assert_eq!(
+            ContractError::NoSufficientUnlockedTokens {},
+            collect_vested(deps_mut.storage, now, 10).expect_err("should error")
+        );
         assert_eq!(
             VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(),
             vec![now.plus_seconds(1)]
@@ -187,7 +206,10 @@ mod tests {
             vec![1u128, 11u128]
         );
 
-        assert_eq!(2, collect_vested(deps_mut.storage, now.plus_seconds(1), 2).unwrap());
+        assert_eq!(
+            2,
+            collect_vested(deps_mut.storage, now.plus_seconds(1), 2).unwrap()
+        );
         assert_eq!(
             VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(),
             vec![now.plus_seconds(1)]
@@ -237,7 +259,10 @@ mod tests {
             .save(deps_mut.storage, &vec![10, 9, 11])
             .unwrap();
 
-        assert_eq!(ContractError::NoSufficientUnlockedTokens {}, collect_vested(deps_mut.storage, now, 30).expect_err("should error"));
+        assert_eq!(
+            ContractError::NoSufficientUnlockedTokens {},
+            collect_vested(deps_mut.storage, now, 30).expect_err("should error")
+        );
         assert_eq!(
             VESTING_TIMESTAMPS.load(deps_mut.storage).unwrap(),
             vec![
