@@ -211,9 +211,9 @@ fn migrate_109_handler(deps: DepsMut, env: Env) -> Result<Response, ContractErro
             Ok(old - delta)
         })?;
         // only necessary if we don't refund back to the contract
-        WITHDRAWN_UNLOCKED.update(deps.storage, |old| -> Result<u128, StdError> {
-            Ok(old + delta)
-        })?;
+        // WITHDRAWN_UNLOCKED.update(deps.storage, |old| -> Result<u128, StdError> {
+        //     Ok(old + delta)
+        // })?;
     } else if env.contract.address.as_str()
         == "sei18qgau4n88tdaxu9y2t2y2px29yvwp50mk4xctp7grwfj7fkcdn8qvs9ry8"
     {
