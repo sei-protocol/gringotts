@@ -195,42 +195,7 @@ fn migrate_105_handler(deps: DepsMut, env: Env) -> Result<Response, ContractErro
 }
 
 fn migrate_109_handler(deps: DepsMut, env: Env) -> Result<Response, ContractError> {
-    // foundation
-    if env.contract.address.as_str()
-        == "sei19se8ass0qvpa2cc60ehnv5dtccznnn5m505cug5tg2gwsjqw5drqm5ptnx"
-    {
-        let total_amount = 700_000_000_000_000_u128; // 700M SEI
-        TOTAL_AMOUNT.save(deps.storage, &total_amount)?;
-        let total_delegations = 530871446501692_u128;
-        let withdrawn_unlocked = 139962026461886_u128;
-        let principal_in_bank = total_amount - withdrawn_unlocked - total_delegations;
-        let old_bank_balance = 53994946773281_u128;
-        let correct_withdrawn_rewards = old_bank_balance - principal_in_bank;
-        let delta = old_bank_balance - correct_withdrawn_rewards; // = principal_in_bank, just for readability
-        WITHDRAWN_STAKING_REWARDS.update(deps.storage, |old| -> Result<u128, StdError> {
-            Ok(old - delta)
-        })?;
-        // only necessary if we don't refund back to the contract
-        // WITHDRAWN_UNLOCKED.update(deps.storage, |old| -> Result<u128, StdError> {
-        //     Ok(old + delta)
-        // })?;
-    } else if env.contract.address.as_str()
-        == "sei18qgau4n88tdaxu9y2t2y2px29yvwp50mk4xctp7grwfj7fkcdn8qvs9ry8"
-    {
-        let total_amount = 1_700_000_000_000_000_u128; // 1700M SEI
-        TOTAL_AMOUNT.save(deps.storage, &total_amount)?;
-    } else if env.contract.address.as_str()
-        == "sei1w0fvamykx7v2e6n5x0e2s39m0jz3krejjkpmgc3tmnqdf8p9fy5syg05yv"
-    {
-        let total_amount = 800_000_000_000_000_u128; // 800M SEI
-        TOTAL_AMOUNT.save(deps.storage, &total_amount)?;
-    } else if env.contract.address.as_str()
-        == "sei1letzrrlgdlrpxj6z279fx85hn5u34mm9nrc9hq4e6wxz5c79je2swt6x4a"
-    {
-        let total_amount = 1_200_000_000_000_000_u128; // 1200M SEI
-        TOTAL_AMOUNT.save(deps.storage, &total_amount)?;
-    }
-    Ok(Response::default())
+    Ok(Response::new())
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
