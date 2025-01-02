@@ -1,7 +1,9 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    coins, to_binary, Addr, BankMsg, Binary, BlockInfo, CosmosMsg, Decimal, Delegation, Deps, DepsMut, Empty, Env, GovMsg, MessageInfo, Order, Response, StdError, StdResult, Timestamp, VoteOption, WasmMsg
+    coins, to_binary, Addr, BankMsg, Binary, BlockInfo, CosmosMsg, Decimal, Delegation, Deps,
+    DepsMut, Empty, Env, GovMsg, MessageInfo, Order, Response, StdError, StdResult, Timestamp,
+    VoteOption, WasmMsg,
 };
 use cw2::set_contract_version;
 use cw3::{
@@ -13,8 +15,8 @@ use cw_utils::{Threshold, ThresholdError};
 use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{
-    AdminListResponse, ExecuteMsg, InstantiateMsg, MigrateMsg, OpListResponse, QueryMsg, ShowConfigResponse,
-    ShowInfoResponse, ShowTotalVestedResponse
+    AdminListResponse, ExecuteMsg, InstantiateMsg, MigrateMsg, OpListResponse, QueryMsg,
+    ShowConfigResponse, ShowInfoResponse, ShowTotalVestedResponse,
 };
 use crate::permission::{authorize_admin, authorize_op, authorize_self_call};
 use crate::staking::{
@@ -23,9 +25,9 @@ use crate::staking::{
 };
 use crate::state::{
     get_number_of_admins, next_proposal_id, ADMINS, ADMIN_VOTING_THRESHOLD, BALLOTS, DENOM,
-    MAX_VOTING_PERIOD, OPS, PROPOSALS, STAKING_REWARD_ADDRESS, UNLOCK_DISTRIBUTION_ADDRESS,
-    VESTING_AMOUNTS, VESTING_TIMESTAMPS, WITHDRAWN_LOCKED, WITHDRAWN_STAKING_REWARDS,
-    WITHDRAWN_UNLOCKED,
+    MAX_VOTING_PERIOD, OPS, PROPOSALS, STAKING_REWARD_ADDRESS, TOTAL_AMOUNT,
+    UNLOCK_DISTRIBUTION_ADDRESS, VESTING_AMOUNTS, VESTING_TIMESTAMPS, WITHDRAWN_LOCKED,
+    WITHDRAWN_STAKING_REWARDS, WITHDRAWN_UNLOCKED,
 };
 use crate::vesting::{collect_vested, distribute_vested, total_vested_amount};
 use semver::Version;
@@ -55,11 +57,7 @@ pub fn validate_migration(
 
 // NOTE: New migrations may need store migrations if store changes are being made
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn migrate(
-    deps: DepsMut,
-    env: Env,
-    _msg: MigrateMsg,
-) -> Result<Response, ContractError> {
+pub fn migrate(deps: DepsMut, env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
     validate_migration(deps.as_ref(), CONTRACT_NAME, CONTRACT_VERSION)?;
 
     // set the new version
@@ -69,11 +67,17 @@ pub fn migrate(
         return migrate_105_handler(deps, env);
     }
 
+    if CONTRACT_VERSION == "0.1.9" {
+        return migrate_109_handler(deps, env);
+    }
+
     Ok(Response::default())
 }
 
 fn migrate_105_handler(deps: DepsMut, env: Env) -> Result<Response, ContractError> {
-    if env.contract.address.as_str() == "sei1w0fvamykx7v2e6n5x0e2s39m0jz3krejjkpmgc3tmnqdf8p9fy5syg05yv" {
+    if env.contract.address.as_str()
+        == "sei1w0fvamykx7v2e6n5x0e2s39m0jz3krejjkpmgc3tmnqdf8p9fy5syg05yv"
+    {
         let timestamps: Vec<Timestamp> = vec![
             Timestamp::from_nanos(1726358400000000000),
             Timestamp::from_nanos(1728950400000000000),
@@ -116,7 +120,9 @@ fn migrate_105_handler(deps: DepsMut, env: Env) -> Result<Response, ContractErro
         return Ok(Response::default());
     }
 
-    if env.contract.address.as_str() == "sei1letzrrlgdlrpxj6z279fx85hn5u34mm9nrc9hq4e6wxz5c79je2swt6x4a" {
+    if env.contract.address.as_str()
+        == "sei1letzrrlgdlrpxj6z279fx85hn5u34mm9nrc9hq4e6wxz5c79je2swt6x4a"
+    {
         let timestamps: Vec<Timestamp> = vec![
             Timestamp::from_nanos(1726358400000000000),
             Timestamp::from_nanos(1728950400000000000),
@@ -188,6 +194,10 @@ fn migrate_105_handler(deps: DepsMut, env: Env) -> Result<Response, ContractErro
     Ok(Response::default())
 }
 
+fn migrate_109_handler(deps: DepsMut, env: Env) -> Result<Response, ContractError> {
+    Ok(Response::new())
+}
+
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
@@ -218,6 +228,8 @@ pub fn instantiate(
     DENOM.save(deps.storage, &msg.tranche.denom)?;
     VESTING_TIMESTAMPS.save(deps.storage, &msg.tranche.vesting_timestamps)?;
     VESTING_AMOUNTS.save(deps.storage, &msg.tranche.vesting_amounts)?;
+    let total: u128 = msg.tranche.vesting_amounts.iter().sum();
+    TOTAL_AMOUNT.save(deps.storage, &total)?;
     UNLOCK_DISTRIBUTION_ADDRESS.save(
         deps.storage,
         &msg.tranche.unlocked_token_distribution_address,
@@ -266,18 +278,29 @@ pub fn execute(
         ExecuteMsg::ProposeUpdateAdmin { admin, remove } => {
             execute_propose_update_admin(deps, env, info, admin, remove)
         }
-        ExecuteMsg::ProposeUpdateUnlockedDistributionAddress {unlocked_distribution_address } => {
-            execute_propose_update_unlocked_distribution_address(deps, env, info, unlocked_distribution_address)
-        }
-        ExecuteMsg::ProposeUpdateStakingRewardDistributionAddress {staking_reward_distribution_address } => {
-            execute_propose_update_staking_reward_distribution_address(deps, env, info, staking_reward_distribution_address)
-        }
+        ExecuteMsg::ProposeUpdateUnlockedDistributionAddress {
+            unlocked_distribution_address,
+        } => execute_propose_update_unlocked_distribution_address(
+            deps,
+            env,
+            info,
+            unlocked_distribution_address,
+        ),
+        ExecuteMsg::ProposeUpdateStakingRewardDistributionAddress {
+            staking_reward_distribution_address,
+        } => execute_propose_update_staking_reward_distribution_address(
+            deps,
+            env,
+            info,
+            staking_reward_distribution_address,
+        ),
         ExecuteMsg::ProposeEmergencyWithdraw { dst } => {
             execute_propose_emergency_withdraw(deps, env, info, dst)
         }
-        ExecuteMsg::ProposeGovVote { gov_proposal_id, gov_vote } => {
-            execute_propose_gov_vote(deps, env, info, gov_proposal_id, gov_vote)
-        }
+        ExecuteMsg::ProposeGovVote {
+            gov_proposal_id,
+            gov_vote,
+        } => execute_propose_gov_vote(deps, env, info, gov_proposal_id, gov_vote),
         ExecuteMsg::VoteProposal { proposal_id } => execute_vote(deps, env, info, proposal_id),
         ExecuteMsg::ProcessProposal { proposal_id } => {
             execute_process_proposal(deps, env, info, proposal_id)
@@ -285,12 +308,22 @@ pub fn execute(
         ExecuteMsg::InternalUpdateAdmin { admin, remove } => {
             execute_internal_update_admin(deps, env, info, admin, remove)
         }
-        ExecuteMsg::InternalUpdateUnlockedDistributionAddress { unlocked_distribution_address } => {
-            execute_internal_update_unlocked_distribution_address(deps, env, info, unlocked_distribution_address)
-        }
-        ExecuteMsg::InternalUpdateStakingRewardDistributionAddress {staking_reward_distribution_address } => {
-            execute_internal_update_staking_reward_distribution_address(deps, env, info, staking_reward_distribution_address)
-        }
+        ExecuteMsg::InternalUpdateUnlockedDistributionAddress {
+            unlocked_distribution_address,
+        } => execute_internal_update_unlocked_distribution_address(
+            deps,
+            env,
+            info,
+            unlocked_distribution_address,
+        ),
+        ExecuteMsg::InternalUpdateStakingRewardDistributionAddress {
+            staking_reward_distribution_address,
+        } => execute_internal_update_staking_reward_distribution_address(
+            deps,
+            env,
+            info,
+            staking_reward_distribution_address,
+        ),
         ExecuteMsg::InternalWithdrawLocked { dst } => {
             execute_internal_withdraw_locked(deps, env, info, dst)
         }
@@ -386,15 +419,25 @@ fn execute_initiate_withdraw_reward(
 // To avoid under-withdraw, the operator can wait till there is no unbonding amount for the contract when executing
 // rewards withdrawal.
 fn calculate_withdrawn_rewards(deps: Deps, env: Env) -> Result<u128, ContractError> {
-    let bank_balance = deps.querier.query_balance(env.contract.address.clone(), DENOM.load(deps.storage)?)?.amount.u128();
-    let total_locked: u128 = VESTING_AMOUNTS.load(deps.storage)?.iter().sum();
-    let withdrawn_principal = WITHDRAWN_LOCKED.load(deps.storage)? + WITHDRAWN_UNLOCKED.load(deps.storage)?;
-    let staked: u128 = deps.querier.query_all_delegations(env.contract.address)?.iter().map(|del: &Delegation| -> u128 {
-        if del.amount.clone().denom != DENOM.load(deps.storage).unwrap() {
-            return 0;
-        }
-        del.amount.amount.u128()
-    }).sum();
+    let bank_balance = deps
+        .querier
+        .query_balance(env.contract.address.clone(), DENOM.load(deps.storage)?)?
+        .amount
+        .u128();
+    let total_locked: u128 = TOTAL_AMOUNT.load(deps.storage)?;
+    let withdrawn_principal =
+        WITHDRAWN_LOCKED.load(deps.storage)? + WITHDRAWN_UNLOCKED.load(deps.storage)?;
+    let staked: u128 = deps
+        .querier
+        .query_all_delegations(env.contract.address)?
+        .iter()
+        .map(|del: &Delegation| -> u128 {
+            if del.amount.clone().denom != DENOM.load(deps.storage).unwrap() {
+                return 0;
+            }
+            del.amount.amount.u128()
+        })
+        .sum();
     let mut principal_in_bank: u128 = 0;
     if withdrawn_principal + staked < total_locked {
         principal_in_bank = total_locked - withdrawn_principal - staked;
@@ -459,7 +502,10 @@ fn execute_propose_update_unlocked_distribution_address(
     let msg = ExecuteMsg::InternalUpdateUnlockedDistributionAddress {
         unlocked_distribution_address: unlocked_distribution_address.clone(),
     };
-    let title = format!("updating unlocked distribution address {}", unlocked_distribution_address.to_string());
+    let title = format!(
+        "updating unlocked distribution address {}",
+        unlocked_distribution_address.to_string()
+    );
     execute_propose(
         deps,
         env.clone(),
@@ -482,7 +528,10 @@ fn execute_propose_update_staking_reward_distribution_address(
     let msg = ExecuteMsg::InternalUpdateStakingRewardDistributionAddress {
         staking_reward_distribution_address: staking_reward_distribution_address.clone(),
     };
-    let title = format!("updating staking reward distribution address {}", staking_reward_distribution_address.to_string());
+    let title = format!(
+        "updating staking reward distribution address {}",
+        staking_reward_distribution_address.to_string()
+    );
     execute_propose(
         deps,
         env.clone(),
@@ -525,7 +574,10 @@ fn execute_propose_gov_vote(
     gov_vote: VoteOption,
 ) -> Result<Response<Empty>, ContractError> {
     let title = format!("voting {:?} for {}", gov_vote, gov_proposal_id);
-    let msg = GovMsg::Vote { proposal_id: gov_proposal_id, vote: gov_vote };
+    let msg = GovMsg::Vote {
+        proposal_id: gov_proposal_id,
+        vote: gov_vote,
+    };
     execute_propose(
         deps,
         env.clone(),
@@ -801,7 +853,7 @@ fn query_total_vested(deps: Deps, env: Env) -> StdResult<ShowTotalVestedResponse
 
 #[cfg(test)]
 mod tests {
-    use cosmwasm_std::testing::{MOCK_CONTRACT_ADDR, mock_dependencies, mock_env, mock_info};
+    use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info, MOCK_CONTRACT_ADDR};
     use cosmwasm_std::{from_binary, Addr, Coin, Decimal, FullDelegation, Timestamp, Validator};
 
     use cw2::{get_contract_version, ContractVersion};
@@ -1055,7 +1107,7 @@ mod tests {
         let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
-        let msg = ExecuteMsg::InitiateWithdrawUnlocked { amount: 12000000};
+        let msg = ExecuteMsg::InitiateWithdrawUnlocked { amount: 12000000 };
         let mut env = mock_env();
         let mut block = env.block;
         block.time = block.time.plus_seconds(31536000);
@@ -1103,7 +1155,10 @@ mod tests {
             ],
         );
         // principal: 48000000 - 1500000 (delegations). Withdrawn rewards: 100
-        deps.querier.update_balance(mock_env().contract.address.clone(), vec![Coin::new(48000000 - 1500000 + 100, "usei")]);
+        deps.querier.update_balance(
+            mock_env().contract.address.clone(),
+            vec![Coin::new(48000000 - 1500000 + 100, "usei")],
+        );
 
         let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
@@ -1158,10 +1213,16 @@ mod tests {
         // Verify admin has updated after internal call
         let internal_update = ExecuteMsg::InternalUpdateAdmin {
             admin: new_admin.clone(),
-            remove: false
+            remove: false,
         };
         let internal_info = mock_info(MOCK_CONTRACT_ADDR, &[]);
-        execute(deps.as_mut(), mock_env(), internal_info, internal_update.clone()).unwrap();
+        execute(
+            deps.as_mut(),
+            mock_env(),
+            internal_info,
+            internal_update.clone(),
+        )
+        .unwrap();
         let result = match ADMINS.load(deps.as_ref().storage, &Addr::unchecked(new_admin.clone())) {
             Ok(_) => Ok(()),
             Err(_) => Err(ContractError::Unauthorized {}),
@@ -1211,11 +1272,22 @@ mod tests {
 
         // Verify address has updated after internal call
         let internal_update = ExecuteMsg::InternalUpdateUnlockedDistributionAddress {
-            unlocked_distribution_address: new_addr.clone()
+            unlocked_distribution_address: new_addr.clone(),
         };
         let internal_info = mock_info(MOCK_CONTRACT_ADDR, &[]);
-        execute(deps.as_mut(), mock_env(), internal_info, internal_update.clone()).unwrap();
-        assert_eq!(UNLOCK_DISTRIBUTION_ADDRESS.load(deps.as_ref().storage).unwrap(), new_addr);
+        execute(
+            deps.as_mut(),
+            mock_env(),
+            internal_info,
+            internal_update.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            UNLOCK_DISTRIBUTION_ADDRESS
+                .load(deps.as_ref().storage)
+                .unwrap(),
+            new_addr
+        );
     }
 
     #[test]
@@ -1244,11 +1316,20 @@ mod tests {
 
         // Verify address has updated after internal call
         let internal_update = ExecuteMsg::InternalUpdateStakingRewardDistributionAddress {
-            staking_reward_distribution_address: new_addr.clone()
+            staking_reward_distribution_address: new_addr.clone(),
         };
         let internal_info = mock_info(MOCK_CONTRACT_ADDR, &[]);
-        execute(deps.as_mut(), mock_env(), internal_info, internal_update.clone()).unwrap();
-        assert_eq!(STAKING_REWARD_ADDRESS.load(deps.as_ref().storage).unwrap(), new_addr);
+        execute(
+            deps.as_mut(),
+            mock_env(),
+            internal_info,
+            internal_update.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            STAKING_REWARD_ADDRESS.load(deps.as_ref().storage).unwrap(),
+            new_addr
+        );
     }
 
     #[test]
@@ -1298,7 +1379,10 @@ mod tests {
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let info = mock_info(VOTER1, &[]);
-        let proposal = ExecuteMsg::ProposeGovVote { gov_proposal_id: 1, gov_vote: VoteOption::Yes };
+        let proposal = ExecuteMsg::ProposeGovVote {
+            gov_proposal_id: 1,
+            gov_vote: VoteOption::Yes,
+        };
         let res = execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
 
         // Verify
@@ -1454,7 +1538,10 @@ mod tests {
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
 
         let info = mock_info(VOTER1, &[]);
-        let proposal = ExecuteMsg::ProposeGovVote { gov_proposal_id: 1, gov_vote: VoteOption::Yes };
+        let proposal = ExecuteMsg::ProposeGovVote {
+            gov_proposal_id: 1,
+            gov_vote: VoteOption::Yes,
+        };
         execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
 
         let info = mock_info(VOTER2, &[]);
@@ -1807,8 +1894,8 @@ mod tests {
 
         let info = mock_info(OWNER, &[Coin::new(48000000, "usei".to_string())]);
         setup_test_case(deps.as_mut(), info.clone()).unwrap();
-        let msg = QueryMsg::TotalVested{};
-        let vesting_timestamps= VESTING_TIMESTAMPS.load(deps.as_ref().storage);
+        let msg = QueryMsg::TotalVested {};
+        let vesting_timestamps = VESTING_TIMESTAMPS.load(deps.as_ref().storage);
         let mut env = mock_env();
         env.block.time = *(vesting_timestamps.unwrap().first().unwrap());
         let bin = query(deps.as_ref(), env, msg).unwrap();
