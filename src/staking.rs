@@ -5,7 +5,7 @@ use cosmwasm_std::{
 use serde::Deserialize;
 
 use crate::{
-    msg::{StakingQueryExt, UnbondingDelegationsResponse},
+    msg::{SeiQuery, SeiQueryWrapper, SeiRoute, UnbondingDelegationsResponse},
     state::{DENOM, STAKING_REWARD_ADDRESS},
     ContractError,
 };
@@ -42,7 +42,7 @@ pub fn undelegate(response: Response, validator: String, amount: u128, denom: St
 }
 
 pub fn withdraw_delegation_rewards(
-    deps: Deps<StakingQueryExt>,
+    deps: Deps<SeiQueryWrapper>,
     response: Response,
     validator: String,
     amount: u128,
@@ -64,7 +64,7 @@ pub fn withdraw_delegation_rewards(
 // the `all_delegations` endpoint do not return full delegation info (i.e. no withdrawable delegation reward)
 // so we only return validators here for subsequent logic to query full delegation info one validator at a time
 pub fn get_all_delegated_validators(
-    deps: Deps<StakingQueryExt>,
+    deps: Deps<SeiQueryWrapper>,
     env: Env,
 ) -> Result<Vec<String>, ContractError> {
     Ok(deps
@@ -78,9 +78,12 @@ pub fn get_all_delegated_validators(
         })?)
 }
 
-pub fn get_unbonding_balance(deps: Deps<StakingQueryExt>, env: Env) -> StdResult<u128> {
-    let request = StakingQueryExt::UnbondingDelegations {
-        delegator: env.contract.address.to_string(),
+pub fn get_unbonding_balance(deps: Deps<SeiQueryWrapper>, env: Env) -> StdResult<u128> {
+    let request = SeiQueryWrapper {
+        route: SeiRoute::Stakingext,
+        query_data: SeiQuery::UnbondingDelegations {
+            delegator: env.contract.address.to_string(),
+        },
     };
     let wrapped_request = QueryRequest::Custom(request);
     let response: UnbondingDelegationsResponse = deps.querier.query(&wrapped_request)?;
@@ -92,7 +95,7 @@ pub fn get_unbonding_balance(deps: Deps<StakingQueryExt>, env: Env) -> StdResult
 }
 
 pub fn get_delegation_rewards(
-    deps: Deps<StakingQueryExt>,
+    deps: Deps<SeiQueryWrapper>,
     env: Env,
     validator: String,
 ) -> Result<u128, ContractError> {
@@ -120,7 +123,7 @@ mod tests {
         Addr, Coin, Decimal, FullDelegation, OwnedDeps, Validator,
     };
 
-    use crate::msg::StakingQueryExt;
+    use crate::msg::SeiQueryWrapper;
     use crate::state::DENOM;
 
     use super::get_delegation_rewards;
@@ -128,7 +131,7 @@ mod tests {
     const VALIDATOR: &str = "val";
     const DELEGATOR: &str = "del";
 
-    fn mock_dependencies() -> OwnedDeps<MockStorage, MockApi, MockQuerier, StakingQueryExt> {
+    fn mock_dependencies() -> OwnedDeps<MockStorage, MockApi, MockQuerier, SeiQueryWrapper> {
         OwnedDeps {
             storage: MockStorage::default(),
             api: MockApi::default(),

@@ -16,7 +16,7 @@ use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{
     AdminListResponse, ExecuteMsg, InstantiateMsg, MigrateMsg, OpListResponse, QueryMsg,
-    ShowConfigResponse, ShowInfoResponse, ShowTotalVestedResponse, StakingQueryExt,
+    SeiQueryWrapper, ShowConfigResponse, ShowInfoResponse, ShowTotalVestedResponse,
 };
 use crate::permission::{authorize_admin, authorize_op, authorize_self_call};
 use crate::staking::{
@@ -37,7 +37,7 @@ const CONTRACT_NAME: &str = "crates.io:sei-gringotts";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn validate_migration(
-    deps: Deps<StakingQueryExt>,
+    deps: Deps<SeiQueryWrapper>,
     contract_name: &str,
     contract_version: &str,
 ) -> Result<(), ContractError> {
@@ -58,7 +58,7 @@ pub fn validate_migration(
 // NOTE: New migrations may need store migrations if store changes are being made
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn migrate(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     _msg: MigrateMsg,
 ) -> Result<Response, ContractError> {
@@ -79,7 +79,7 @@ pub fn migrate(
 }
 
 fn migrate_105_handler(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
 ) -> Result<Response, ContractError> {
     if env.contract.address.as_str()
@@ -202,7 +202,7 @@ fn migrate_105_handler(
 }
 
 fn migrate_109_handler(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
 ) -> Result<Response, ContractError> {
     Ok(Response::new())
@@ -210,7 +210,7 @@ fn migrate_109_handler(
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     msg: InstantiateMsg,
@@ -263,7 +263,7 @@ pub fn instantiate(
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     msg: ExecuteMsg,
@@ -341,7 +341,7 @@ pub fn execute(
 }
 
 fn execute_delegate(
-    deps: Deps<StakingQueryExt>,
+    deps: Deps<SeiQueryWrapper>,
     info: MessageInfo,
     validator: String,
     amount: u128,
@@ -354,7 +354,7 @@ fn execute_delegate(
 }
 
 fn execute_redelegate(
-    deps: Deps<StakingQueryExt>,
+    deps: Deps<SeiQueryWrapper>,
     info: MessageInfo,
     src_validator: String,
     dst_validator: String,
@@ -368,7 +368,7 @@ fn execute_redelegate(
 }
 
 fn execute_undelegate(
-    deps: Deps<StakingQueryExt>,
+    deps: Deps<SeiQueryWrapper>,
     info: MessageInfo,
     validator: String,
     amount: u128,
@@ -381,7 +381,7 @@ fn execute_undelegate(
 }
 
 fn execute_initiate_withdraw_unlocked(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     amount: u128,
@@ -395,7 +395,7 @@ fn execute_initiate_withdraw_unlocked(
 }
 
 fn execute_initiate_withdraw_reward(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
 ) -> Result<Response<Empty>, ContractError> {
@@ -429,7 +429,7 @@ fn execute_initiate_withdraw_reward(
 // To avoid under-withdraw, the operator can wait till there is no unbonding amount for the contract when executing
 // rewards withdrawal.
 fn calculate_withdrawn_rewards(
-    deps: Deps<StakingQueryExt>,
+    deps: Deps<SeiQueryWrapper>,
     env: Env,
 ) -> Result<u128, ContractError> {
     let bank_balance = deps
@@ -463,7 +463,7 @@ fn calculate_withdrawn_rewards(
 }
 
 fn execute_update_op(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     info: MessageInfo,
     op: Addr,
     remove: bool,
@@ -478,7 +478,7 @@ fn execute_update_op(
 }
 
 fn execute_propose_update_admin(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     admin: Addr,
@@ -508,7 +508,7 @@ fn execute_propose_update_admin(
 }
 
 fn execute_propose_update_unlocked_distribution_address(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     unlocked_distribution_address: Addr,
@@ -534,7 +534,7 @@ fn execute_propose_update_unlocked_distribution_address(
 }
 
 fn execute_propose_update_staking_reward_distribution_address(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     staking_reward_distribution_address: Addr,
@@ -560,7 +560,7 @@ fn execute_propose_update_staking_reward_distribution_address(
 }
 
 fn execute_propose_emergency_withdraw(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     dst: Addr,
@@ -581,7 +581,7 @@ fn execute_propose_emergency_withdraw(
 }
 
 fn execute_propose_gov_vote(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     gov_proposal_id: u64,
@@ -602,7 +602,7 @@ fn execute_propose_gov_vote(
 }
 
 fn execute_propose(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     title: String,
@@ -642,7 +642,7 @@ fn execute_propose(
 }
 
 fn execute_vote(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     proposal_id: u64,
@@ -679,7 +679,7 @@ fn execute_vote(
 }
 
 fn execute_process_proposal(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     proposal_id: u64,
@@ -707,7 +707,7 @@ fn execute_process_proposal(
 }
 
 fn execute_internal_update_admin(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     admin: Addr,
@@ -723,7 +723,7 @@ fn execute_internal_update_admin(
 }
 
 fn execute_internal_update_unlocked_distribution_address(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     unlocked_distribution_address: Addr,
@@ -734,7 +734,7 @@ fn execute_internal_update_unlocked_distribution_address(
 }
 
 fn execute_internal_update_staking_reward_distribution_address(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     staking_reward_distribution_address: Addr,
@@ -745,7 +745,7 @@ fn execute_internal_update_staking_reward_distribution_address(
 }
 
 fn execute_internal_withdraw_locked(
-    deps: DepsMut<StakingQueryExt>,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     dst: Addr,
@@ -764,7 +764,7 @@ fn execute_internal_withdraw_locked(
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn query(deps: Deps<StakingQueryExt>, env: Env, msg: QueryMsg) -> StdResult<Binary> {
+pub fn query(deps: Deps<SeiQueryWrapper>, env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::ListProposals {} => to_binary(&query_proposals(deps, env)?),
         QueryMsg::ListVotes { proposal_id } => to_binary(&query_votes(deps, proposal_id)?),
@@ -776,7 +776,7 @@ pub fn query(deps: Deps<StakingQueryExt>, env: Env, msg: QueryMsg) -> StdResult<
     }
 }
 
-fn query_proposals(deps: Deps<StakingQueryExt>, env: Env) -> StdResult<ProposalListResponse> {
+fn query_proposals(deps: Deps<SeiQueryWrapper>, env: Env) -> StdResult<ProposalListResponse> {
     let proposals: Vec<ProposalResponse> = PROPOSALS
         .range(deps.storage, None, None, Order::Descending)
         .map(|p| map_proposal(&env.block, p))
@@ -805,7 +805,7 @@ fn map_proposal(
     })
 }
 
-fn query_votes(deps: Deps<StakingQueryExt>, proposal_id: u64) -> StdResult<VoteListResponse> {
+fn query_votes(deps: Deps<SeiQueryWrapper>, proposal_id: u64) -> StdResult<VoteListResponse> {
     let votes = BALLOTS
         .prefix(proposal_id)
         .range(deps.storage, None, None, Order::Ascending)
@@ -822,7 +822,7 @@ fn query_votes(deps: Deps<StakingQueryExt>, proposal_id: u64) -> StdResult<VoteL
     Ok(VoteListResponse { votes })
 }
 
-fn query_admins(deps: Deps<StakingQueryExt>) -> StdResult<AdminListResponse> {
+fn query_admins(deps: Deps<SeiQueryWrapper>) -> StdResult<AdminListResponse> {
     let admins: Vec<Addr> = ADMINS
         .range(deps.storage, None, None, Order::Ascending)
         .map(|admin| admin.map(|(admin, _)| -> Addr { admin }))
@@ -830,7 +830,7 @@ fn query_admins(deps: Deps<StakingQueryExt>) -> StdResult<AdminListResponse> {
     Ok(AdminListResponse { admins })
 }
 
-fn query_ops(deps: Deps<StakingQueryExt>) -> StdResult<OpListResponse> {
+fn query_ops(deps: Deps<SeiQueryWrapper>) -> StdResult<OpListResponse> {
     let ops: Vec<Addr> = OPS
         .range(deps.storage, None, None, Order::Ascending)
         .map(|op| op.map(|(op, _)| -> Addr { op }))
@@ -838,7 +838,7 @@ fn query_ops(deps: Deps<StakingQueryExt>) -> StdResult<OpListResponse> {
     Ok(OpListResponse { ops })
 }
 
-fn query_info(deps: Deps<StakingQueryExt>) -> StdResult<ShowInfoResponse> {
+fn query_info(deps: Deps<SeiQueryWrapper>) -> StdResult<ShowInfoResponse> {
     Ok(ShowInfoResponse {
         denom: DENOM.load(deps.storage)?,
         vesting_timestamps: VESTING_TIMESTAMPS.load(deps.storage)?,
@@ -851,14 +851,14 @@ fn query_info(deps: Deps<StakingQueryExt>) -> StdResult<ShowInfoResponse> {
     })
 }
 
-fn query_config(deps: Deps<StakingQueryExt>) -> StdResult<ShowConfigResponse> {
+fn query_config(deps: Deps<SeiQueryWrapper>) -> StdResult<ShowConfigResponse> {
     Ok(ShowConfigResponse {
         max_voting_period: MAX_VOTING_PERIOD.load(deps.storage)?,
         admin_voting_threshold: ADMIN_VOTING_THRESHOLD.load(deps.storage)?,
     })
 }
 
-fn query_total_vested(deps: Deps<StakingQueryExt>, env: Env) -> StdResult<ShowTotalVestedResponse> {
+fn query_total_vested(deps: Deps<SeiQueryWrapper>, env: Env) -> StdResult<ShowTotalVestedResponse> {
     let vested_amount = total_vested_amount(deps.storage, env.block.time)?;
     Ok(ShowTotalVestedResponse {
         vested_amount: vested_amount,
@@ -881,7 +881,7 @@ mod tests {
     use cw_utils::{Duration, Expiration, ThresholdResponse};
 
     use crate::data_structure::Tranche;
-    use crate::msg::{StakingQueryExt, UnbondingDelegationEntry, UnbondingDelegationsResponse};
+    use crate::msg::{SeiQueryWrapper, UnbondingDelegationEntry, UnbondingDelegationsResponse};
     use crate::state::get_number_of_ops;
 
     use super::*;
@@ -898,7 +898,7 @@ mod tests {
     const REWARD_ADDR1: &str = "reward0001";
 
     fn mock_dependencies(
-    ) -> OwnedDeps<MockStorage, MockApi, MockQuerier<StakingQueryExt>, StakingQueryExt> {
+    ) -> OwnedDeps<MockStorage, MockApi, MockQuerier<SeiQueryWrapper>, SeiQueryWrapper> {
         OwnedDeps {
             storage: MockStorage::default(),
             api: MockApi::default(),
@@ -910,7 +910,7 @@ mod tests {
     // this will set up the instantiation for other tests
     #[track_caller]
     fn setup_test_case(
-        deps: DepsMut<StakingQueryExt>,
+        deps: DepsMut<SeiQueryWrapper>,
         info: MessageInfo,
     ) -> Result<Response<Empty>, ContractError> {
         let env = mock_env();
@@ -1196,7 +1196,7 @@ mod tests {
         // principal: 48000000 - 1500000 (delegations).
         // Withdrawn rewards: principal - balance (100) + 10 = 110
         deps.querier = deps.querier.with_custom_handler(
-            |_: &StakingQueryExt| -> MockQuerierCustomHandlerResult {
+            |_: &SeiQueryWrapper| -> MockQuerierCustomHandlerResult {
                 let res = UnbondingDelegationsResponse {
                     entries: vec![UnbondingDelegationEntry {
                         creation_height: 1,

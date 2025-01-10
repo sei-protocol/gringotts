@@ -130,11 +130,22 @@ pub struct ShowTotalVestedResponse {
 }
 
 #[cw_serde]
-pub enum StakingQueryExt {
-    UnbondingDelegations { delegator: String },
+pub struct SeiQueryWrapper {
+    pub route: SeiRoute,
+    pub query_data: SeiQuery,
 }
 
-impl CustomQuery for StakingQueryExt {}
+impl CustomQuery for SeiQueryWrapper {}
+
+#[cw_serde]
+pub enum SeiRoute {
+    Stakingext,
+}
+
+#[cw_serde]
+pub enum SeiQuery {
+    UnbondingDelegations { delegator: String },
+}
 
 #[cw_serde]
 pub struct UnbondingDelegationEntry {
