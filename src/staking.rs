@@ -1,6 +1,11 @@
-use cosmwasm_std::{coins, BankMsg, Coin, Deps, DistributionMsg, Env, Response, StakingMsg};
+use cosmwasm_std::{
+    coins, BankMsg, Coin, Deps, DistributionMsg, Env, QueryRequest, Response, StakingMsg,
+    StdResult, Uint128,
+};
+use serde::Deserialize;
 
 use crate::{
+    msg::{StakingQueryExt, UnbondingDelegationsResponse},
     state::{DENOM, STAKING_REWARD_ADDRESS},
     ContractError,
 };
@@ -37,7 +42,7 @@ pub fn undelegate(response: Response, validator: String, amount: u128, denom: St
 }
 
 pub fn withdraw_delegation_rewards(
-    deps: Deps,
+    deps: Deps<StakingQueryExt>,
     response: Response,
     validator: String,
     amount: u128,
@@ -58,7 +63,10 @@ pub fn withdraw_delegation_rewards(
 
 // the `all_delegations` endpoint do not return full delegation info (i.e. no withdrawable delegation reward)
 // so we only return validators here for subsequent logic to query full delegation info one validator at a time
-pub fn get_all_delegated_validators(deps: Deps, env: Env) -> Result<Vec<String>, ContractError> {
+pub fn get_all_delegated_validators(
+    deps: Deps<StakingQueryExt>,
+    env: Env,
+) -> Result<Vec<String>, ContractError> {
     Ok(deps
         .querier
         .query_all_delegations(env.contract.address.to_string())
@@ -70,8 +78,21 @@ pub fn get_all_delegated_validators(deps: Deps, env: Env) -> Result<Vec<String>,
         })?)
 }
 
+pub fn get_unbonding_balance(deps: Deps<StakingQueryExt>, env: Env) -> StdResult<u128> {
+    let request = StakingQueryExt::UnbondingDelegations {
+        delegator: env.contract.address.to_string(),
+    };
+    let wrapped_request = QueryRequest::Custom(request);
+    let response: UnbondingDelegationsResponse = deps.querier.query(&wrapped_request)?;
+    Ok(response
+        .entries
+        .iter()
+        .map(|entry| -> u128 { entry.balance.u128() })
+        .sum())
+}
+
 pub fn get_delegation_rewards(
-    deps: Deps,
+    deps: Deps<StakingQueryExt>,
     env: Env,
     validator: String,
 ) -> Result<u128, ContractError> {
@@ -93,17 +114,28 @@ pub fn get_delegation_rewards(
 
 #[cfg(test)]
 mod tests {
+    use core::marker::PhantomData;
     use cosmwasm_std::{
-        testing::{mock_dependencies, mock_env},
-        Addr, Coin, Decimal, FullDelegation, Validator,
+        testing::{mock_env, mock_info, MockApi, MockQuerier, MockStorage, MOCK_CONTRACT_ADDR},
+        Addr, Coin, Decimal, FullDelegation, OwnedDeps, Validator,
     };
 
+    use crate::msg::StakingQueryExt;
     use crate::state::DENOM;
 
     use super::get_delegation_rewards;
 
     const VALIDATOR: &str = "val";
     const DELEGATOR: &str = "del";
+
+    fn mock_dependencies() -> OwnedDeps<MockStorage, MockApi, MockQuerier, StakingQueryExt> {
+        OwnedDeps {
+            storage: MockStorage::default(),
+            api: MockApi::default(),
+            querier: MockQuerier::default(),
+            custom_query_type: PhantomData::default(),
+        }
+    }
 
     #[test]
     fn test_get_delegation_rewards_empty() {
