@@ -14,6 +14,11 @@ pub struct InstantiateMsg {
     pub tranche: Tranche,
     pub max_voting_period: Duration,
     pub admin_voting_threshold_percentage: u8,
+
+    // override cumulative state (for inheriting a contract or testing)
+    pub withdrawn_staking_rewards: Option<u128>,
+    pub withdrawn_unlocked: Option<u128>,
+    pub withdrawn_locked: Option<u128>,
 }
 
 #[cw_serde]
