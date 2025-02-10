@@ -1,5 +1,5 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{Addr, Timestamp, VoteOption};
+use cosmwasm_std::{Addr, CustomQuery, Timestamp, Uint128, VoteOption};
 use cw_utils::{Duration, Threshold};
 
 use crate::data_structure::Tranche;
@@ -127,4 +127,35 @@ pub struct ShowConfigResponse {
 #[cw_serde]
 pub struct ShowTotalVestedResponse {
     pub vested_amount: u128,
+}
+
+#[cw_serde]
+pub struct SeiQueryWrapper {
+    pub route: SeiRoute,
+    pub query_data: SeiQuery,
+}
+
+impl CustomQuery for SeiQueryWrapper {}
+
+#[cw_serde]
+pub enum SeiRoute {
+    Stakingext,
+}
+
+#[cw_serde]
+pub enum SeiQuery {
+    UnbondingDelegations { delegator: String },
+}
+
+#[cw_serde]
+pub struct UnbondingDelegationEntry {
+    pub creation_height: i64,
+    pub completion_time: String,
+    pub initial_balance: Uint128,
+    pub balance: Uint128,
+}
+
+#[cw_serde]
+pub struct UnbondingDelegationsResponse {
+    pub entries: Vec<UnbondingDelegationEntry>,
 }

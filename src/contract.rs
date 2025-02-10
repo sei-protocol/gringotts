@@ -16,12 +16,12 @@ use crate::data_structure::EmptyStruct;
 use crate::error::ContractError;
 use crate::msg::{
     AdminListResponse, ExecuteMsg, InstantiateMsg, MigrateMsg, OpListResponse, QueryMsg,
-    ShowConfigResponse, ShowInfoResponse, ShowTotalVestedResponse,
+    SeiQueryWrapper, ShowConfigResponse, ShowInfoResponse, ShowTotalVestedResponse,
 };
 use crate::permission::{authorize_admin, authorize_op, authorize_self_call};
 use crate::staking::{
-    delegate, get_all_delegated_validators, get_delegation_rewards, redelegate, undelegate,
-    withdraw_delegation_rewards,
+    delegate, get_all_delegated_validators, get_delegation_rewards, get_unbonding_balance,
+    redelegate, undelegate, withdraw_delegation_rewards,
 };
 use crate::state::{
     get_number_of_admins, next_proposal_id, ADMINS, ADMIN_VOTING_THRESHOLD, BALLOTS, DENOM,
@@ -37,7 +37,7 @@ const CONTRACT_NAME: &str = "crates.io:sei-gringotts";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn validate_migration(
-    deps: Deps,
+    deps: Deps<SeiQueryWrapper>,
     contract_name: &str,
     contract_version: &str,
 ) -> Result<(), ContractError> {
@@ -57,7 +57,11 @@ pub fn validate_migration(
 
 // NOTE: New migrations may need store migrations if store changes are being made
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn migrate(deps: DepsMut, env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
+pub fn migrate(
+    deps: DepsMut<SeiQueryWrapper>,
+    env: Env,
+    _msg: MigrateMsg,
+) -> Result<Response, ContractError> {
     validate_migration(deps.as_ref(), CONTRACT_NAME, CONTRACT_VERSION)?;
 
     // set the new version
@@ -74,7 +78,10 @@ pub fn migrate(deps: DepsMut, env: Env, _msg: MigrateMsg) -> Result<Response, Co
     Ok(Response::default())
 }
 
-fn migrate_105_handler(deps: DepsMut, env: Env) -> Result<Response, ContractError> {
+fn migrate_105_handler(
+    deps: DepsMut<SeiQueryWrapper>,
+    env: Env,
+) -> Result<Response, ContractError> {
     if env.contract.address.as_str()
         == "sei1w0fvamykx7v2e6n5x0e2s39m0jz3krejjkpmgc3tmnqdf8p9fy5syg05yv"
     {
@@ -194,13 +201,16 @@ fn migrate_105_handler(deps: DepsMut, env: Env) -> Result<Response, ContractErro
     Ok(Response::default())
 }
 
-fn migrate_109_handler(deps: DepsMut, env: Env) -> Result<Response, ContractError> {
+fn migrate_109_handler(
+    deps: DepsMut<SeiQueryWrapper>,
+    env: Env,
+) -> Result<Response, ContractError> {
     Ok(Response::new())
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     msg: InstantiateMsg,
@@ -253,7 +263,7 @@ pub fn instantiate(
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     msg: ExecuteMsg,
@@ -331,7 +341,7 @@ pub fn execute(
 }
 
 fn execute_delegate(
-    deps: Deps,
+    deps: Deps<SeiQueryWrapper>,
     info: MessageInfo,
     validator: String,
     amount: u128,
@@ -344,7 +354,7 @@ fn execute_delegate(
 }
 
 fn execute_redelegate(
-    deps: Deps,
+    deps: Deps<SeiQueryWrapper>,
     info: MessageInfo,
     src_validator: String,
     dst_validator: String,
@@ -358,7 +368,7 @@ fn execute_redelegate(
 }
 
 fn execute_undelegate(
-    deps: Deps,
+    deps: Deps<SeiQueryWrapper>,
     info: MessageInfo,
     validator: String,
     amount: u128,
@@ -371,7 +381,7 @@ fn execute_undelegate(
 }
 
 fn execute_initiate_withdraw_unlocked(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     amount: u128,
@@ -385,7 +395,7 @@ fn execute_initiate_withdraw_unlocked(
 }
 
 fn execute_initiate_withdraw_reward(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
 ) -> Result<Response<Empty>, ContractError> {
@@ -418,7 +428,10 @@ fn execute_initiate_withdraw_reward(
 // calculationg for now. This would make under-withdraw possible but still impossible to over-withdraw (which is bad).
 // To avoid under-withdraw, the operator can wait till there is no unbonding amount for the contract when executing
 // rewards withdrawal.
-fn calculate_withdrawn_rewards(deps: Deps, env: Env) -> Result<u128, ContractError> {
+fn calculate_withdrawn_rewards(
+    deps: Deps<SeiQueryWrapper>,
+    env: Env,
+) -> Result<u128, ContractError> {
     let bank_balance = deps
         .querier
         .query_balance(env.contract.address.clone(), DENOM.load(deps.storage)?)?
@@ -429,7 +442,7 @@ fn calculate_withdrawn_rewards(deps: Deps, env: Env) -> Result<u128, ContractErr
         WITHDRAWN_LOCKED.load(deps.storage)? + WITHDRAWN_UNLOCKED.load(deps.storage)?;
     let staked: u128 = deps
         .querier
-        .query_all_delegations(env.contract.address)?
+        .query_all_delegations(env.contract.address.clone())?
         .iter()
         .map(|del: &Delegation| -> u128 {
             if del.amount.clone().denom != DENOM.load(deps.storage).unwrap() {
@@ -438,9 +451,10 @@ fn calculate_withdrawn_rewards(deps: Deps, env: Env) -> Result<u128, ContractErr
             del.amount.amount.u128()
         })
         .sum();
+    let unbonding: u128 = get_unbonding_balance(deps, env.clone())?;
     let mut principal_in_bank: u128 = 0;
-    if withdrawn_principal + staked < total_locked {
-        principal_in_bank = total_locked - withdrawn_principal - staked;
+    if withdrawn_principal + staked + unbonding < total_locked {
+        principal_in_bank = total_locked - withdrawn_principal - staked - unbonding;
     }
     if principal_in_bank < bank_balance {
         return Ok(bank_balance - principal_in_bank);
@@ -449,7 +463,7 @@ fn calculate_withdrawn_rewards(deps: Deps, env: Env) -> Result<u128, ContractErr
 }
 
 fn execute_update_op(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     info: MessageInfo,
     op: Addr,
     remove: bool,
@@ -464,7 +478,7 @@ fn execute_update_op(
 }
 
 fn execute_propose_update_admin(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     admin: Addr,
@@ -494,7 +508,7 @@ fn execute_propose_update_admin(
 }
 
 fn execute_propose_update_unlocked_distribution_address(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     unlocked_distribution_address: Addr,
@@ -520,7 +534,7 @@ fn execute_propose_update_unlocked_distribution_address(
 }
 
 fn execute_propose_update_staking_reward_distribution_address(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     staking_reward_distribution_address: Addr,
@@ -546,7 +560,7 @@ fn execute_propose_update_staking_reward_distribution_address(
 }
 
 fn execute_propose_emergency_withdraw(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     dst: Addr,
@@ -567,7 +581,7 @@ fn execute_propose_emergency_withdraw(
 }
 
 fn execute_propose_gov_vote(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     gov_proposal_id: u64,
@@ -588,7 +602,7 @@ fn execute_propose_gov_vote(
 }
 
 fn execute_propose(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     title: String,
@@ -628,7 +642,7 @@ fn execute_propose(
 }
 
 fn execute_vote(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     proposal_id: u64,
@@ -665,7 +679,7 @@ fn execute_vote(
 }
 
 fn execute_process_proposal(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     proposal_id: u64,
@@ -693,7 +707,7 @@ fn execute_process_proposal(
 }
 
 fn execute_internal_update_admin(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     admin: Addr,
@@ -709,7 +723,7 @@ fn execute_internal_update_admin(
 }
 
 fn execute_internal_update_unlocked_distribution_address(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     unlocked_distribution_address: Addr,
@@ -720,7 +734,7 @@ fn execute_internal_update_unlocked_distribution_address(
 }
 
 fn execute_internal_update_staking_reward_distribution_address(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     staking_reward_distribution_address: Addr,
@@ -731,7 +745,7 @@ fn execute_internal_update_staking_reward_distribution_address(
 }
 
 fn execute_internal_withdraw_locked(
-    deps: DepsMut,
+    deps: DepsMut<SeiQueryWrapper>,
     env: Env,
     info: MessageInfo,
     dst: Addr,
@@ -750,7 +764,7 @@ fn execute_internal_withdraw_locked(
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
+pub fn query(deps: Deps<SeiQueryWrapper>, env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::ListProposals {} => to_binary(&query_proposals(deps, env)?),
         QueryMsg::ListVotes { proposal_id } => to_binary(&query_votes(deps, proposal_id)?),
@@ -762,7 +776,7 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
     }
 }
 
-fn query_proposals(deps: Deps, env: Env) -> StdResult<ProposalListResponse> {
+fn query_proposals(deps: Deps<SeiQueryWrapper>, env: Env) -> StdResult<ProposalListResponse> {
     let proposals: Vec<ProposalResponse> = PROPOSALS
         .range(deps.storage, None, None, Order::Descending)
         .map(|p| map_proposal(&env.block, p))
@@ -791,7 +805,7 @@ fn map_proposal(
     })
 }
 
-fn query_votes(deps: Deps, proposal_id: u64) -> StdResult<VoteListResponse> {
+fn query_votes(deps: Deps<SeiQueryWrapper>, proposal_id: u64) -> StdResult<VoteListResponse> {
     let votes = BALLOTS
         .prefix(proposal_id)
         .range(deps.storage, None, None, Order::Ascending)
@@ -808,7 +822,7 @@ fn query_votes(deps: Deps, proposal_id: u64) -> StdResult<VoteListResponse> {
     Ok(VoteListResponse { votes })
 }
 
-fn query_admins(deps: Deps) -> StdResult<AdminListResponse> {
+fn query_admins(deps: Deps<SeiQueryWrapper>) -> StdResult<AdminListResponse> {
     let admins: Vec<Addr> = ADMINS
         .range(deps.storage, None, None, Order::Ascending)
         .map(|admin| admin.map(|(admin, _)| -> Addr { admin }))
@@ -816,7 +830,7 @@ fn query_admins(deps: Deps) -> StdResult<AdminListResponse> {
     Ok(AdminListResponse { admins })
 }
 
-fn query_ops(deps: Deps) -> StdResult<OpListResponse> {
+fn query_ops(deps: Deps<SeiQueryWrapper>) -> StdResult<OpListResponse> {
     let ops: Vec<Addr> = OPS
         .range(deps.storage, None, None, Order::Ascending)
         .map(|op| op.map(|(op, _)| -> Addr { op }))
@@ -824,7 +838,7 @@ fn query_ops(deps: Deps) -> StdResult<OpListResponse> {
     Ok(OpListResponse { ops })
 }
 
-fn query_info(deps: Deps) -> StdResult<ShowInfoResponse> {
+fn query_info(deps: Deps<SeiQueryWrapper>) -> StdResult<ShowInfoResponse> {
     Ok(ShowInfoResponse {
         denom: DENOM.load(deps.storage)?,
         vesting_timestamps: VESTING_TIMESTAMPS.load(deps.storage)?,
@@ -837,14 +851,14 @@ fn query_info(deps: Deps) -> StdResult<ShowInfoResponse> {
     })
 }
 
-fn query_config(deps: Deps) -> StdResult<ShowConfigResponse> {
+fn query_config(deps: Deps<SeiQueryWrapper>) -> StdResult<ShowConfigResponse> {
     Ok(ShowConfigResponse {
         max_voting_period: MAX_VOTING_PERIOD.load(deps.storage)?,
         admin_voting_threshold: ADMIN_VOTING_THRESHOLD.load(deps.storage)?,
     })
 }
 
-fn query_total_vested(deps: Deps, env: Env) -> StdResult<ShowTotalVestedResponse> {
+fn query_total_vested(deps: Deps<SeiQueryWrapper>, env: Env) -> StdResult<ShowTotalVestedResponse> {
     let vested_amount = total_vested_amount(deps.storage, env.block.time)?;
     Ok(ShowTotalVestedResponse {
         vested_amount: vested_amount,
@@ -853,13 +867,21 @@ fn query_total_vested(deps: Deps, env: Env) -> StdResult<ShowTotalVestedResponse
 
 #[cfg(test)]
 mod tests {
-    use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info, MOCK_CONTRACT_ADDR};
-    use cosmwasm_std::{from_binary, Addr, Coin, Decimal, FullDelegation, Timestamp, Validator};
+    use core::marker::PhantomData;
+    use cosmwasm_std::testing::{
+        mock_env, mock_info, MockApi, MockQuerier, MockQuerierCustomHandlerResult, MockStorage,
+        MOCK_CONTRACT_ADDR,
+    };
+    use cosmwasm_std::{
+        from_binary, to_json_binary, Addr, Coin, ContractResult, Decimal, FullDelegation,
+        OwnedDeps, SystemResult, Timestamp, Uint128, Validator,
+    };
 
     use cw2::{get_contract_version, ContractVersion};
     use cw_utils::{Duration, Expiration, ThresholdResponse};
 
     use crate::data_structure::Tranche;
+    use crate::msg::{SeiQueryWrapper, UnbondingDelegationEntry, UnbondingDelegationsResponse};
     use crate::state::get_number_of_ops;
 
     use super::*;
@@ -875,9 +897,22 @@ mod tests {
     const UNLOCK_ADDR1: &str = "unlock0001";
     const REWARD_ADDR1: &str = "reward0001";
 
+    fn mock_dependencies(
+    ) -> OwnedDeps<MockStorage, MockApi, MockQuerier<SeiQueryWrapper>, SeiQueryWrapper> {
+        OwnedDeps {
+            storage: MockStorage::default(),
+            api: MockApi::default(),
+            querier: MockQuerier::new(&[]),
+            custom_query_type: PhantomData::default(),
+        }
+    }
+
     // this will set up the instantiation for other tests
     #[track_caller]
-    fn setup_test_case(deps: DepsMut, info: MessageInfo) -> Result<Response<Empty>, ContractError> {
+    fn setup_test_case(
+        deps: DepsMut<SeiQueryWrapper>,
+        info: MessageInfo,
+    ) -> Result<Response<Empty>, ContractError> {
         let env = mock_env();
         let mut vesting_amounts = vec![12000000u128];
         let mut vesting_timestamps = vec![env.block.time.plus_seconds(31536000)];
@@ -1154,10 +1189,26 @@ mod tests {
                 },
             ],
         );
-        // principal: 48000000 - 1500000 (delegations). Withdrawn rewards: 100
         deps.querier.update_balance(
             mock_env().contract.address.clone(),
             vec![Coin::new(48000000 - 1500000 + 100, "usei")],
+        );
+        // principal: 48000000 - 1500000 (delegations).
+        // Withdrawn rewards: principal - balance (100) + 10 = 110
+        deps.querier = deps.querier.with_custom_handler(
+            |_: &SeiQueryWrapper| -> MockQuerierCustomHandlerResult {
+                let res = UnbondingDelegationsResponse {
+                    entries: vec![UnbondingDelegationEntry {
+                        creation_height: 1,
+                        completion_time: "".to_string(),
+                        initial_balance: Uint128::new(10),
+                        balance: Uint128::new(10),
+                    }],
+                };
+                return MockQuerierCustomHandlerResult::Ok(ContractResult::Ok(
+                    to_json_binary(&res).unwrap(),
+                ));
+            },
         );
 
         let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
@@ -1167,7 +1218,7 @@ mod tests {
         let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
         assert_eq!(5, res.messages.len());
         assert_eq!(
-            35 + 100,
+            35 + 110,
             WITHDRAWN_STAKING_REWARDS
                 .load(deps.as_ref().storage)
                 .unwrap()
