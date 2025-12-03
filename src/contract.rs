@@ -411,9 +411,11 @@ fn execute_initiate_withdraw_reward(
     for validator in get_all_delegated_validators(deps.as_ref(), env.clone())? {
         let withdrawable_amount =
             get_delegation_rewards(deps.as_ref(), env.clone(), validator.clone())?;
-        response =
-            withdraw_delegation_rewards(deps.as_ref(), response, validator, withdrawable_amount)?;
-        total += withdrawable_amount;
+        if withdrawable_amount > 0 {
+            response =
+                withdraw_delegation_rewards(deps.as_ref(), response, validator, withdrawable_amount)?;
+            total += withdrawable_amount;
+        }
     }
     WITHDRAWN_STAKING_REWARDS.update(deps.storage, |old| -> Result<u128, StdError> {
         Ok(old + total)
