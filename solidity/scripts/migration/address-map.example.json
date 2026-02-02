@@ -1,0 +1,13 @@
+{
+  "_comment": "Example address mapping file for Gringotts migration",
+  "_instructions": [
+    "Replace the example addresses below with actual mappings",
+    "Get EVM address from Sei address using: seid q evm sei-addr <sei_address>",
+    "Remove this _comment and _instructions before using"
+  ],
+  "sei1exampleadmin1...": "0x1111111111111111111111111111111111111111",
+  "sei1exampleadmin2...": "0x2222222222222222222222222222222222222222",
+  "sei1exampleoperator...": "0x3333333333333333333333333333333333333333",
+  "sei1exampleunlock...": "0x4444444444444444444444444444444444444444",
+  "sei1examplereward...": "0x5555555555555555555555555555555555555555"
+}

@@ -1,0 +1,31 @@
+{
+  "name": "gringotts-solidity",
+  "version": "1.0.0",
+  "description": "Gringotts vesting contract - Solidity port",
+  "main": "index.js",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "coverage": "hardhat coverage",
+    "clean": "hardhat clean",
+    "node": "hardhat node",
+    "deploy:local": "hardhat run scripts/deploy.js --network localhost"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "@openzeppelin/contracts": "^5.0.0",
+    "hardhat": "^2.19.0"
+  },
+  "keywords": [
+    "solidity",
+    "vesting",
+    "multisig",
+    "staking"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@openzeppelin/contracts-upgradeable": "^5.4.0",
+    "@openzeppelin/hardhat-upgrades": "^3.9.1"
+  }
+}

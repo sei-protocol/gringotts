@@ -8,3 +8,7 @@
 hash.txt
 contracts.txt
 .idea/
+
+# Node
+node_modules/
+**/cache
