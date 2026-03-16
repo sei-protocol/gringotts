@@ -5,8 +5,10 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
+import "@openzeppelin/contracts/interfaces/draft-IERC1822.sol";
 import "../interfaces/IStaking.sol";
 import "../interfaces/IDistribution.sol";
+import "../interfaces/IGov.sol";
 
 /**
  * @title Gringotts
@@ -22,7 +24,6 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         Open,
         Passed,
         Executed,
-        Rejected,
         Expired
     }
 
@@ -31,7 +32,8 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         UpdateUnlockedDistributionAddress,
         UpdateStakingRewardDistributionAddress,
         EmergencyWithdraw,
-        UpgradeContract  // New proposal type for upgrades
+        UpgradeContract,
+        GovVote
     }
 
     // ============ Structs ============
@@ -50,6 +52,11 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         address proposer;
     }
 
+    struct GovVoteData {
+        uint64 govProposalId;
+        int32 voteOption;  // 1=Yes, 2=Abstain, 3=No, 4=NoWithVeto
+    }
+
     // ============ Constants ============
 
     uint256 private constant HUNDRED_YEARS_IN_SECONDS = 100 * 365 * 24 * 60 * 60;
@@ -58,6 +65,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     // Sei Precompile addresses
     IStaking public constant STAKING = IStaking(STAKING_PRECOMPILE_ADDRESS);
     IDistribution public constant DISTRIBUTION = IDistribution(DISTRIBUTION_PRECOMPILE_ADDRESS);
+    IGov public constant GOV = IGov(GOV_PRECOMPILE_ADDRESS);
 
     // ============ State Variables ============
 
@@ -90,8 +98,8 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     mapping(uint256 => Proposal) public proposals;
     mapping(uint256 => mapping(address => bool)) public hasVoted;
 
-    // Upgrade tracking
-    address public pendingImplementation;
+    // Gov vote tracking (proposal ID => GovVoteData)
+    mapping(uint256 => GovVoteData) public govVoteData;
 
     // ============ Events ============
 
@@ -118,6 +126,8 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     event StakingRewardAddressUpdated(address indexed newAddress);
     event UpgradeProposed(address indexed newImplementation, uint256 indexed proposalId);
     event UpgradeExecuted(address indexed newImplementation);
+    event GovVoteProposed(uint64 indexed govProposalId, int32 voteOption, uint256 indexed proposalId);
+    event GovVoteExecuted(uint64 indexed govProposalId, int32 voteOption);
 
     // ============ Errors ============
 
@@ -139,6 +149,9 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     error UpgradeNotApproved();
     error CannotRemoveLastAdmin();
     error DuplicateAddress();
+    error InvalidVoteOption();
+    error GovVoteFailed();
+    error SetWithdrawAddressFailed();
 
     // ============ Modifiers ============
 
@@ -222,7 +235,8 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         }
 
         // Set distribution precompile to send rewards to stakingRewardAddress
-        DISTRIBUTION.setWithdrawAddress(_stakingRewardAddress);
+        bool success = DISTRIBUTION.setWithdrawAddress(_stakingRewardAddress);
+        if (!success) revert SetWithdrawAddressFailed();
     }
 
     // ============ Operator Functions ============
@@ -299,7 +313,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
             DISTRIBUTION.withdrawMultipleDelegationRewards(validators);
         }
 
-        uint256 totalWithdrawn = balanceBefore - address(this).balance + existingRewards;
+        uint256 totalWithdrawn = balanceBefore - address(this).balance;
         withdrawnStakingRewards += totalWithdrawn;
 
         emit StakingRewardsWithdrawn(stakingRewardAddress, totalWithdrawn);
@@ -310,14 +324,15 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
      * @param validator The validator's Sei address
      */
     function withdrawSingleValidatorReward(string calldata validator) external onlyOperator nonReentrant {
-        uint256 balanceBefore = address(this).balance;
+        // Query pending rewards for this validator before withdrawal
+        uint256 pendingRewards = _getValidatorPendingRewards(validator);
 
+        // Rewards go directly to stakingRewardAddress (set in initialize)
         DISTRIBUTION.withdrawDelegationRewards(validator);
 
-        uint256 withdrawn = balanceBefore - address(this).balance;
-        if (withdrawn > 0) {
-            withdrawnStakingRewards += withdrawn;
-            emit StakingRewardsWithdrawn(stakingRewardAddress, withdrawn);
+        if (pendingRewards > 0) {
+            withdrawnStakingRewards += pendingRewards;
+            emit StakingRewardsWithdrawn(stakingRewardAddress, pendingRewards);
         }
     }
 
@@ -419,6 +434,41 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     }
 
     /**
+     * @notice Propose a vote on a Sei governance proposal
+     * @param govProposalId The governance proposal ID on Sei
+     * @param voteOption Vote option: 1=Yes, 2=Abstain, 3=No, 4=NoWithVeto
+     */
+    function proposeGovVote(uint64 govProposalId, int32 voteOption) external onlyAdmin {
+        // Validate vote option (1=Yes, 2=Abstain, 3=No, 4=NoWithVeto)
+        if (voteOption < 1 || voteOption > 4) revert InvalidVoteOption();
+
+        string memory voteOptionStr;
+        if (voteOption == 1) voteOptionStr = "Yes";
+        else if (voteOption == 2) voteOptionStr = "Abstain";
+        else if (voteOption == 3) voteOptionStr = "No";
+        else voteOptionStr = "NoWithVeto";
+
+        string memory title = string(
+            abi.encodePacked(
+                "Vote ",
+                voteOptionStr,
+                " on gov proposal #",
+                _uint64ToString(govProposalId)
+            )
+        );
+
+        _createProposal(ProposalType.GovVote, title, address(0), false);
+        
+        // Store the gov vote data for this proposal
+        govVoteData[proposalCount] = GovVoteData({
+            govProposalId: govProposalId,
+            voteOption: voteOption
+        });
+
+        emit GovVoteProposed(govProposalId, voteOption, proposalCount);
+    }
+
+    /**
      * @notice Vote on a proposal (only Yes votes supported, like the original)
      * @param proposalId The proposal ID
      */
@@ -462,6 +512,8 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
             _executeEmergencyWithdraw(prop.targetAddress);
         } else if (prop.proposalType == ProposalType.UpgradeContract) {
             _executeUpgrade(prop.targetAddress);
+        } else if (prop.proposalType == ProposalType.GovVote) {
+            _executeGovVote(proposalId);
         }
 
         emit ProposalExecuted(proposalId);
@@ -544,17 +596,23 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     }
 
     /**
-     * @notice Get all delegations for this contract
+     * @notice Get delegations for this contract (first page only)
+     * @dev For contracts with many delegations, use delegatorDelegations directly with pagination
+     *      Internal calculations (rewards, etc.) properly handle pagination
      */
     function getAllDelegations() external view returns (IStaking.Delegation[] memory) {
-        return STAKING.delegations(address(this));
+        IStaking.DelegationsResponse memory response = STAKING.delegatorDelegations(address(this), "");
+        return response.delegations;
     }
 
     /**
-     * @notice Get unbonding delegations
+     * @notice Get unbonding delegations (first page only)
+     * @dev For contracts with many unbonding delegations, use delegatorUnbondingDelegations directly with pagination
+     *      Internal calculations (rewards, etc.) properly handle pagination
      */
     function getUnbondingDelegations() external view returns (IStaking.UnbondingDelegation[] memory) {
-        return STAKING.unbondingDelegations(address(this));
+        IStaking.UnbondingDelegationsResponse memory response = STAKING.delegatorUnbondingDelegations(address(this), "");
+        return response.unbondingDelegations;
     }
 
     /**
@@ -591,16 +649,40 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
      * @notice Authorization check for UUPS upgrades
      * @dev Only allows upgrades through the multi-sig proposal process
      */
-    function _authorizeUpgrade(address newImplementation) internal view override {
-        // Verify the upgrade was approved through proposal process
-        if (pendingImplementation != newImplementation) revert UpgradeNotApproved();
+    /**
+     * @notice Block direct calls to upgradeToAndCall - upgrades must go through proposal system
+     * @dev This override ensures no one can bypass the multi-sig governance
+     */
+    function upgradeToAndCall(address, bytes memory) public payable override {
+        revert UpgradeNotApproved();
     }
 
+    /**
+     * @notice Authorization hook required by UUPSUpgradeable - always reverts
+     * @dev All upgrades go through _executeUpgrade which bypasses this check
+     */
+    function _authorizeUpgrade(address) internal pure override {
+        revert UpgradeNotApproved();
+    }
+
+    /**
+     * @notice Execute an approved upgrade
+     * @dev Calls ERC1967Utils directly, bypassing upgradeToAndCall
+     * @param newImplementation The new implementation address
+     */
     function _executeUpgrade(address newImplementation) internal {
-        pendingImplementation = newImplementation;
-        // Use the public upgradeToAndCall which handles authorization via _authorizeUpgrade
-        this.upgradeToAndCall(newImplementation, "");
-        pendingImplementation = address(0);
+        // Verify the new implementation is UUPS-compatible
+        try IERC1822Proxiable(newImplementation).proxiableUUID() returns (bytes32 slot) {
+            if (slot != ERC1967Utils.IMPLEMENTATION_SLOT) {
+                revert InvalidImplementation();
+            }
+        } catch {
+            revert InvalidImplementation();
+        }
+
+        // Perform the upgrade directly via ERC1967Utils
+        // This avoids the external self-call pattern and pendingImplementation state
+        ERC1967Utils.upgradeToAndCall(newImplementation, "");
         emit UpgradeExecuted(newImplementation);
     }
 
@@ -713,7 +795,8 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     function _executeUpdateStakingRewardAddress(address newAddress) internal {
         stakingRewardAddress = newAddress;
         // Update the distribution precompile's withdraw address
-        DISTRIBUTION.setWithdrawAddress(newAddress);
+        bool success = DISTRIBUTION.setWithdrawAddress(newAddress);
+        if (!success) revert SetWithdrawAddressFailed();
         emit StakingRewardAddressUpdated(newAddress);
     }
 
@@ -734,6 +817,13 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         }
 
         emit EmergencyWithdraw(dst, amount);
+    }
+
+    function _executeGovVote(uint256 proposalId) internal {
+        GovVoteData memory voteData = govVoteData[proposalId];
+        bool success = GOV.vote(voteData.govProposalId, voteData.voteOption);
+        if (!success) revert GovVoteFailed();
+        emit GovVoteExecuted(voteData.govProposalId, voteData.voteOption);
     }
 
     function _collectVested(uint256 requestedAmount) internal returns (uint256) {
@@ -804,21 +894,11 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         uint256 bankBalance = address(this).balance;
         uint256 withdrawnPrincipal = withdrawnLocked + withdrawnUnlocked;
 
-        // Calculate staked amount from delegations
-        uint256 staked = 0;
-        IStaking.Delegation[] memory dels = STAKING.delegations(address(this));
-        for (uint256 i = 0; i < dels.length; i++) {
-            staked += dels[i].balance.amount;
-        }
+        // Calculate staked amount from all delegations (with pagination)
+        uint256 staked = _getTotalStaked();
 
-        // Calculate unbonding amount
-        uint256 unbonding = 0;
-        IStaking.UnbondingDelegation[] memory unbondings = STAKING.unbondingDelegations(address(this));
-        for (uint256 i = 0; i < unbondings.length; i++) {
-            for (uint256 j = 0; j < unbondings[i].entries.length; j++) {
-                unbonding += unbondings[i].entries[j].balance;
-            }
-        }
+        // Calculate unbonding amount from all unbonding delegations (with pagination)
+        uint256 unbonding = _getTotalUnbonding();
 
         uint256 principalInBank = 0;
         if (withdrawnPrincipal + staked + unbonding < totalAmount) {
@@ -829,6 +909,115 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
             return bankBalance - principalInBank;
         }
         return 0;
+    }
+
+    /**
+     * @notice Get total staked amount across all validators, handling pagination
+     * @return total Total staked amount in wei
+     */
+    function _getTotalStaked() internal view returns (uint256 total) {
+        bytes memory nextKey = "";
+        
+        do {
+            IStaking.DelegationsResponse memory response = STAKING.delegatorDelegations(address(this), nextKey);
+            
+            for (uint256 i = 0; i < response.delegations.length; i++) {
+                total += response.delegations[i].balance.amount;
+            }
+            
+            nextKey = response.nextKey;
+        } while (nextKey.length > 0);
+        
+        return total;
+    }
+
+    /**
+     * @notice Get total unbonding amount across all validators, handling pagination
+     * @return total Total unbonding amount in wei
+     */
+    function _getTotalUnbonding() internal view returns (uint256 total) {
+        bytes memory nextKey = "";
+        
+        do {
+            IStaking.UnbondingDelegationsResponse memory response = STAKING.delegatorUnbondingDelegations(address(this), nextKey);
+            
+            for (uint256 i = 0; i < response.unbondingDelegations.length; i++) {
+                for (uint256 j = 0; j < response.unbondingDelegations[i].entries.length; j++) {
+                    total += _stringToUint(response.unbondingDelegations[i].entries[j].balance);
+                }
+            }
+            
+            nextKey = response.nextKey;
+        } while (nextKey.length > 0);
+        
+        return total;
+    }
+
+    /**
+     * @notice Parse a string to uint256, handling decimal and suffixed formats
+     * @dev Parses only the integer part - stops at first non-digit character
+     *      This correctly handles:
+     *      - "1000000" → 1000000
+     *      - "1000000.000000000000000000" → 1000000 (stops at decimal)
+     *      - "1000000usei" → 1000000 (stops at denom suffix)
+     * @param s The string to parse
+     * @return result The parsed uint256 value
+     */
+    function _stringToUint(string memory s) internal pure returns (uint256 result) {
+        bytes memory b = bytes(s);
+        uint256 i = 0;
+        
+        // Skip leading whitespace
+        while (i < b.length && (b[i] == 0x20 || b[i] == 0x09 || b[i] == 0x0a || b[i] == 0x0d)) {
+            i++;
+        }
+        
+        // Parse digits until first non-digit character
+        while (i < b.length) {
+            uint8 c = uint8(b[i]);
+            if (c >= 48 && c <= 57) {
+                // Check for overflow before multiplication
+                if (result > type(uint256).max / 10) {
+                    revert InvalidTranche("numeric overflow in string parsing");
+                }
+                result = result * 10 + (c - 48);
+                i++;
+            } else {
+                // Stop at first non-digit (decimal point, letter, etc.)
+                break;
+            }
+        }
+        
+        // Empty or non-numeric strings return 0, which is valid for balance queries
+        // (e.g., no unbonding delegations means balance is effectively 0)
+        return result;
+    }
+
+    function _getTotalPendingRewards() internal view returns (uint256) {
+        IDistribution.Rewards memory rewardsInfo = DISTRIBUTION.rewards(address(this));
+        uint256 total = 0;
+        for (uint256 i = 0; i < rewardsInfo.total.length; i++) {
+            total += rewardsInfo.total[i].amount;
+        }
+        return total;
+    }
+
+    function _getValidatorPendingRewards(string calldata validator) internal view returns (uint256) {
+        IDistribution.Rewards memory rewardsInfo = DISTRIBUTION.rewards(address(this));
+        for (uint256 i = 0; i < rewardsInfo.rewards.length; i++) {
+            if (_stringsEqual(rewardsInfo.rewards[i].validator_address, validator)) {
+                uint256 total = 0;
+                for (uint256 j = 0; j < rewardsInfo.rewards[i].coins.length; j++) {
+                    total += rewardsInfo.rewards[i].coins[j].amount;
+                }
+                return total;
+            }
+        }
+        return 0;
+    }
+
+    function _stringsEqual(string memory a, string memory b) internal pure returns (bool) {
+        return keccak256(bytes(a)) == keccak256(bytes(b));
     }
 
     function _addressToString(address addr) internal pure returns (string memory) {
@@ -842,6 +1031,25 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
             str[3 + i * 2] = alphabet[uint8(data[i] & 0x0f)];
         }
         return string(str);
+    }
+
+    function _uint64ToString(uint64 value) internal pure returns (string memory) {
+        if (value == 0) {
+            return "0";
+        }
+        uint64 temp = value;
+        uint256 digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint64(value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
     }
 
     // ============ Receive Function ============

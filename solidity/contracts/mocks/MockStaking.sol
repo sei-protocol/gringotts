@@ -43,6 +43,7 @@ contract MockStaking is IStaking {
         _delegations[msg.sender][valAddr].amount += msg.value;
         _delegations[msg.sender][valAddr].shares += msg.value;
 
+        emit Delegate(msg.sender, valAddr, msg.value);
         return true;
     }
 
@@ -64,6 +65,7 @@ contract MockStaking is IStaking {
         _delegations[msg.sender][dstValidator].amount += amount;
         _delegations[msg.sender][dstValidator].shares += amount;
 
+        emit Redelegate(msg.sender, srcValidator, dstValidator, amount);
         return true;
     }
 
@@ -81,6 +83,28 @@ contract MockStaking is IStaking {
         (bool success, ) = msg.sender.call{value: amount}("");
         require(success, "Transfer failed");
 
+        emit Undelegate(msg.sender, valAddr, amount);
+        return true;
+    }
+
+    function createValidator(
+        string memory,
+        string memory moniker,
+        string memory,
+        string memory,
+        string memory,
+        uint256
+    ) external payable override returns (bool) {
+        emit ValidatorCreated(msg.sender, "", moniker);
+        return true;
+    }
+
+    function editValidator(
+        string memory moniker,
+        string memory,
+        uint256
+    ) external override returns (bool) {
+        emit ValidatorEdited(msg.sender, "", moniker);
         return true;
     }
 
@@ -92,16 +116,24 @@ contract MockStaking is IStaking {
     ) external view override returns (Delegation memory) {
         DelegationInfo storage info = _delegations[delegator][valAddr];
         return Delegation({
-            delegatorAddress: _addressToSeiAddress(delegator),
-            validatorAddress: valAddr,
-            shares: Shares({amount: info.shares}),
-            balance: Balance({amount: info.amount})
+            balance: Balance({amount: info.amount, denom: "usei"}),
+            delegation: DelegationDetails({
+                delegator_address: _addressToSeiAddress(delegator),
+                shares: info.shares,
+                decimals: 18,
+                validator_address: valAddr
+            })
         });
     }
 
-    function validators() external pure override returns (Validator[] memory) {
-        // Return empty array for mock
-        return new Validator[](0);
+    function validators(
+        string memory,
+        bytes memory
+    ) external pure override returns (ValidatorsResponse memory) {
+        return ValidatorsResponse({
+            validators: new Validator[](0),
+            nextKey: ""
+        });
     }
 
     function validator(string memory) external pure override returns (Validator memory) {
@@ -109,18 +141,44 @@ contract MockStaking is IStaking {
             operatorAddress: "",
             consensusPubkey: "",
             jailed: false,
-            status: "BOND_STATUS_BONDED",
-            tokens: 0,
-            delegatorShares: 0,
+            status: 3, // BOND_STATUS_BONDED
+            tokens: "0",
+            delegatorShares: "0",
             description: "",
             unbondingHeight: 0,
             unbondingTime: 0,
-            commission: 0,
-            minSelfDelegation: 0
+            commissionRate: "0.1",
+            commissionMaxRate: "0.2",
+            commissionMaxChangeRate: "0.01",
+            commissionUpdateTime: 0,
+            minSelfDelegation: "1"
         });
     }
 
-    function delegations(address delegator) external view override returns (Delegation[] memory) {
+    function validatorDelegations(
+        string memory,
+        bytes memory
+    ) external pure override returns (DelegationsResponse memory) {
+        return DelegationsResponse({
+            delegations: new Delegation[](0),
+            nextKey: ""
+        });
+    }
+
+    function validatorUnbondingDelegations(
+        string memory,
+        bytes memory
+    ) external pure override returns (UnbondingDelegationsResponse memory) {
+        return UnbondingDelegationsResponse({
+            unbondingDelegations: new UnbondingDelegation[](0),
+            nextKey: ""
+        });
+    }
+
+    function delegatorDelegations(
+        address delegator,
+        bytes memory
+    ) external view override returns (DelegationsResponse memory) {
         string[] storage vals = _delegatorValidators[delegator];
         uint256 count = 0;
 
@@ -138,16 +196,44 @@ contract MockStaking is IStaking {
             DelegationInfo storage info = _delegations[delegator][vals[i]];
             if (info.amount > 0) {
                 result[idx] = Delegation({
-                    delegatorAddress: _addressToSeiAddress(delegator),
-                    validatorAddress: vals[i],
-                    shares: Shares({amount: info.shares}),
-                    balance: Balance({amount: info.amount})
+                    balance: Balance({amount: info.amount, denom: "usei"}),
+                    delegation: DelegationDetails({
+                        delegator_address: _addressToSeiAddress(delegator),
+                        shares: info.shares,
+                        decimals: 18,
+                        validator_address: vals[i]
+                    })
                 });
                 idx++;
             }
         }
 
-        return result;
+        return DelegationsResponse({
+            delegations: result,
+            nextKey: ""
+        });
+    }
+
+    function delegatorValidator(
+        address,
+        string memory
+    ) external pure override returns (Validator memory) {
+        return Validator({
+            operatorAddress: "",
+            consensusPubkey: "",
+            jailed: false,
+            status: 3,
+            tokens: "0",
+            delegatorShares: "0",
+            description: "",
+            unbondingHeight: 0,
+            unbondingTime: 0,
+            commissionRate: "0.1",
+            commissionMaxRate: "0.2",
+            commissionMaxChangeRate: "0.01",
+            commissionUpdateTime: 0,
+            minSelfDelegation: "1"
+        });
     }
 
     function unbondingDelegation(
@@ -156,13 +242,13 @@ contract MockStaking is IStaking {
     ) external view override returns (UnbondingDelegation memory) {
         UnbondingInfo storage info = _unbondings[delegator][valAddr];
 
-        UnbondingEntry[] memory entries = new UnbondingEntry[](info.balance > 0 ? 1 : 0);
+        UnbondingDelegationEntry[] memory entries = new UnbondingDelegationEntry[](info.balance > 0 ? 1 : 0);
         if (info.balance > 0) {
-            entries[0] = UnbondingEntry({
+            entries[0] = UnbondingDelegationEntry({
                 creationHeight: 1,
                 completionTime: info.completionTime,
-                initialBalance: info.balance,
-                balance: info.balance
+                initialBalance: _uintToString(info.balance),
+                balance: _uintToString(info.balance)
             });
         }
 
@@ -173,9 +259,10 @@ contract MockStaking is IStaking {
         });
     }
 
-    function unbondingDelegations(
-        address delegator
-    ) external view override returns (UnbondingDelegation[] memory) {
+    function delegatorUnbondingDelegations(
+        address delegator,
+        bytes memory
+    ) external view override returns (UnbondingDelegationsResponse memory) {
         string[] storage vals = _delegatorValidators[delegator];
         uint256 count = 0;
 
@@ -192,12 +279,12 @@ contract MockStaking is IStaking {
         for (uint256 i = 0; i < vals.length; i++) {
             UnbondingInfo storage info = _unbondings[delegator][vals[i]];
             if (info.balance > 0) {
-                UnbondingEntry[] memory entries = new UnbondingEntry[](1);
-                entries[0] = UnbondingEntry({
+                UnbondingDelegationEntry[] memory entries = new UnbondingDelegationEntry[](1);
+                entries[0] = UnbondingDelegationEntry({
                     creationHeight: 1,
                     completionTime: info.completionTime,
-                    initialBalance: info.balance,
-                    balance: info.balance
+                    initialBalance: _uintToString(info.balance),
+                    balance: _uintToString(info.balance)
                 });
 
                 result[idx] = UnbondingDelegation({
@@ -209,22 +296,64 @@ contract MockStaking is IStaking {
             }
         }
 
-        return result;
+        return UnbondingDelegationsResponse({
+            unbondingDelegations: result,
+            nextKey: ""
+        });
     }
 
     function redelegations(
-        address,
         string memory,
-        string memory
-    ) external pure override returns (Redelegation[] memory) {
-        return new Redelegation[](0);
+        string memory,
+        string memory,
+        bytes memory
+    ) external pure override returns (RedelegationsResponse memory) {
+        return RedelegationsResponse({
+            redelegations: new Redelegation[](0),
+            nextKey: ""
+        });
+    }
+
+    function delegatorValidators(
+        address,
+        bytes memory
+    ) external pure override returns (ValidatorsResponse memory) {
+        return ValidatorsResponse({
+            validators: new Validator[](0),
+            nextKey: ""
+        });
+    }
+
+    function historicalInfo(int64) external pure override returns (HistoricalInfo memory) {
+        return HistoricalInfo({
+            height: 0,
+            validators: new Validator[](0)
+        });
+    }
+
+    function pool() external pure override returns (Pool memory) {
+        return Pool({
+            notBondedTokens: "0",
+            bondedTokens: "0"
+        });
+    }
+
+    function params() external pure override returns (Params memory) {
+        return Params({
+            unbondingTime: 1814400, // 21 days in seconds
+            maxValidators: 100,
+            maxEntries: 7,
+            historicalEntries: 10000,
+            bondDenom: "usei",
+            minCommissionRate: "0",
+            maxVotingPowerRatio: "0.1",
+            maxVotingPowerEnforcementThreshold: "100"
+        });
     }
 
     // ============ Helper Functions ============
 
     function _addressToSeiAddress(address addr) internal pure returns (string memory) {
-        // In production, this would convert to sei1... format
-        // For testing, just return a placeholder
         bytes memory alphabet = "0123456789abcdef";
         bytes memory data = abi.encodePacked(addr);
         bytes memory str = new bytes(4 + data.length * 2);
@@ -237,6 +366,25 @@ contract MockStaking is IStaking {
             str[5 + i * 2] = alphabet[uint8(data[i] & 0x0f)];
         }
         return string(str);
+    }
+
+    function _uintToString(uint256 value) internal pure returns (string memory) {
+        if (value == 0) {
+            return "0";
+        }
+        uint256 temp = value;
+        uint256 digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
     }
 
     // ============ Test Helpers ============

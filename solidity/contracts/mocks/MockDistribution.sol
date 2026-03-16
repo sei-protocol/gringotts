@@ -21,6 +21,7 @@ contract MockDistribution is IDistribution {
 
     function setWithdrawAddress(address withdrawAddr) external override returns (bool) {
         withdrawAddresses[msg.sender] = withdrawAddr;
+        emit WithdrawAddressSet(msg.sender, withdrawAddr);
         return true;
     }
 
@@ -36,6 +37,8 @@ contract MockDistribution is IDistribution {
 
             (bool success, ) = recipient.call{value: amount}("");
             require(success, "Transfer failed");
+
+            emit DelegationRewardsWithdrawn(msg.sender, validator, amount);
         }
         return true;
     }
@@ -48,11 +51,14 @@ contract MockDistribution is IDistribution {
             recipient = msg.sender;
         }
 
+        uint256[] memory amounts = new uint256[](validators.length);
         uint256 totalAmount = 0;
+
         for (uint256 i = 0; i < validators.length; i++) {
             uint256 amount = pendingRewards[msg.sender][validators[i]];
             if (amount > 0) {
                 pendingRewards[msg.sender][validators[i]] = 0;
+                amounts[i] = amount;
                 totalAmount += amount;
             }
         }
@@ -62,10 +68,11 @@ contract MockDistribution is IDistribution {
             require(success, "Transfer failed");
         }
 
+        emit MultipleDelegationRewardsWithdrawn(msg.sender, validators, amounts);
         return true;
     }
 
-    function withdrawValidatorCommission(string memory) external pure override returns (bool) {
+    function withdrawValidatorCommission() external pure override returns (bool) {
         // Not implemented for testing
         return true;
     }
@@ -83,24 +90,24 @@ contract MockDistribution is IDistribution {
             }
         }
 
-        RewardInfo[] memory rewardInfos = new RewardInfo[](count);
+        Reward[] memory rewardInfos = new Reward[](count);
         uint256 totalRewards = 0;
         uint256 idx = 0;
 
         for (uint256 i = 0; i < vals.length; i++) {
             uint256 amount = pendingRewards[delegator][vals[i]];
             if (amount > 0) {
-                DecCoin[] memory coins = new DecCoin[](1);
-                coins[0] = DecCoin({denom: "usei", amount: amount, precision: 18});
+                Coin[] memory coins = new Coin[](1);
+                coins[0] = Coin({amount: amount, decimals: 18, denom: "usei"});
 
-                rewardInfos[idx] = RewardInfo({validatorAddress: vals[i], rewards: coins});
+                rewardInfos[idx] = Reward({coins: coins, validator_address: vals[i]});
                 totalRewards += amount;
                 idx++;
             }
         }
 
-        DecCoin[] memory total = new DecCoin[](1);
-        total[0] = DecCoin({denom: "usei", amount: totalRewards, precision: 18});
+        Coin[] memory total = new Coin[](1);
+        total[0] = Coin({amount: totalRewards, decimals: 18, denom: "usei"});
 
         return Rewards({rewards: rewardInfos, total: total});
     }

@@ -19,8 +19,6 @@ contract GringottsFactory {
         uint256 totalAmount
     );
 
-    event ImplementationUpdated(address indexed newImplementation);
-
     // ============ State Variables ============
 
     address public implementation;
