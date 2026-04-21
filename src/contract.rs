@@ -1200,12 +1200,12 @@ mod tests {
         deps.querier = deps.querier.with_custom_handler(
             |_: &SeiQueryWrapper| -> MockQuerierCustomHandlerResult {
                 let res = UnbondingDelegationsResponse {
-                    entries: vec![UnbondingDelegationEntry {
+                    entries: Some(vec![UnbondingDelegationEntry {
                         creation_height: 1,
                         completion_time: "".to_string(),
                         initial_balance: Uint128::new(10),
                         balance: Uint128::new(10),
-                    }],
+                    }]),
                 };
                 return MockQuerierCustomHandlerResult::Ok(ContractResult::Ok(
                     to_json_binary(&res).unwrap(),
@@ -1221,6 +1221,149 @@ mod tests {
         assert_eq!(5, res.messages.len());
         assert_eq!(
             35 + 110,
+            WITHDRAWN_STAKING_REWARDS
+                .load(deps.as_ref().storage)
+                .unwrap()
+        );
+    }
+
+    // Sei's wasmbinding serialises a nil Go slice as JSON null.  Before the fix
+    // (entries: Vec<T>) serde rejected null with "invalid type: null, expected a
+    // sequence".  After the fix (entries: Option<Vec<T>>) null is treated as an
+    // empty list, i.e. zero unbonding balance.
+    #[test]
+    fn initiate_withdraw_reward_null_unbonding_entries() {
+        let validator1 = "val1";
+        let validator2 = "val2";
+        let mut deps = mock_dependencies();
+        deps.querier.update_staking(
+            "usei",
+            &[
+                Validator {
+                    address: validator1.to_string(),
+                    commission: Decimal::zero(),
+                    max_commission: Decimal::zero(),
+                    max_change_rate: Decimal::zero(),
+                },
+                Validator {
+                    address: validator2.to_string(),
+                    commission: Decimal::zero(),
+                    max_commission: Decimal::zero(),
+                    max_change_rate: Decimal::zero(),
+                },
+            ],
+            &[
+                FullDelegation {
+                    delegator: Addr::unchecked(mock_env().contract.address),
+                    validator: validator1.to_string(),
+                    amount: Coin::new(1000000, "usei"),
+                    can_redelegate: Coin::new(0, "usei"),
+                    accumulated_rewards: vec![Coin::new(10, "usei"), Coin::new(20, "usei")],
+                },
+                FullDelegation {
+                    delegator: Addr::unchecked(mock_env().contract.address),
+                    validator: validator2.to_string(),
+                    amount: Coin::new(500000, "usei"),
+                    can_redelegate: Coin::new(0, "usei"),
+                    accumulated_rewards: vec![Coin::new(5, "usei")],
+                },
+            ],
+        );
+        // bank balance = total_locked - staked + 100 implicit rewards
+        deps.querier.update_balance(
+            mock_env().contract.address.clone(),
+            vec![Coin::new(48000000 - 1500000 + 100, "usei")],
+        );
+        // Sei returns null when there are no unbonding delegations.
+        // unbonding = 0, so implicit rewards = bank_balance - principal_in_bank = 100.
+        deps.querier = deps.querier.with_custom_handler(
+            |_: &SeiQueryWrapper| -> MockQuerierCustomHandlerResult {
+                let res = UnbondingDelegationsResponse { entries: None };
+                MockQuerierCustomHandlerResult::Ok(ContractResult::Ok(
+                    to_json_binary(&res).unwrap(),
+                ))
+            },
+        );
+
+        let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let msg = ExecuteMsg::InitiateWithdrawReward {};
+        let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+        // 1 (implicit reward send) + 2 * 2 (WithdrawDelegatorReward + send per validator)
+        assert_eq!(5, res.messages.len());
+        // implicit reward (100) + delegation rewards (10+20+5 = 35)
+        assert_eq!(
+            100 + 35,
+            WITHDRAWN_STAKING_REWARDS
+                .load(deps.as_ref().storage)
+                .unwrap()
+        );
+    }
+
+    // Same scenario but the chain returns an empty array rather than null —
+    // both should produce identical results.
+    #[test]
+    fn initiate_withdraw_reward_empty_unbonding_entries() {
+        let validator1 = "val1";
+        let validator2 = "val2";
+        let mut deps = mock_dependencies();
+        deps.querier.update_staking(
+            "usei",
+            &[
+                Validator {
+                    address: validator1.to_string(),
+                    commission: Decimal::zero(),
+                    max_commission: Decimal::zero(),
+                    max_change_rate: Decimal::zero(),
+                },
+                Validator {
+                    address: validator2.to_string(),
+                    commission: Decimal::zero(),
+                    max_commission: Decimal::zero(),
+                    max_change_rate: Decimal::zero(),
+                },
+            ],
+            &[
+                FullDelegation {
+                    delegator: Addr::unchecked(mock_env().contract.address),
+                    validator: validator1.to_string(),
+                    amount: Coin::new(1000000, "usei"),
+                    can_redelegate: Coin::new(0, "usei"),
+                    accumulated_rewards: vec![Coin::new(10, "usei"), Coin::new(20, "usei")],
+                },
+                FullDelegation {
+                    delegator: Addr::unchecked(mock_env().contract.address),
+                    validator: validator2.to_string(),
+                    amount: Coin::new(500000, "usei"),
+                    can_redelegate: Coin::new(0, "usei"),
+                    accumulated_rewards: vec![Coin::new(5, "usei")],
+                },
+            ],
+        );
+        deps.querier.update_balance(
+            mock_env().contract.address.clone(),
+            vec![Coin::new(48000000 - 1500000 + 100, "usei")],
+        );
+        deps.querier = deps.querier.with_custom_handler(
+            |_: &SeiQueryWrapper| -> MockQuerierCustomHandlerResult {
+                let res = UnbondingDelegationsResponse {
+                    entries: Some(vec![]),
+                };
+                MockQuerierCustomHandlerResult::Ok(ContractResult::Ok(
+                    to_json_binary(&res).unwrap(),
+                ))
+            },
+        );
+
+        let info = mock_info(VOTER5, &[Coin::new(48000000, "usei".to_string())]);
+        setup_test_case(deps.as_mut(), info.clone()).unwrap();
+
+        let msg = ExecuteMsg::InitiateWithdrawReward {};
+        let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+        assert_eq!(5, res.messages.len());
+        assert_eq!(
+            100 + 35,
             WITHDRAWN_STAKING_REWARDS
                 .load(deps.as_ref().storage)
                 .unwrap()
