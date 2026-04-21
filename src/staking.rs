@@ -89,6 +89,7 @@ pub fn get_unbonding_balance(deps: Deps<SeiQueryWrapper>, env: Env) -> StdResult
     let response: UnbondingDelegationsResponse = deps.querier.query(&wrapped_request)?;
     Ok(response
         .entries
+        .unwrap_or_default()
         .iter()
         .map(|entry| -> u128 { entry.balance.u128() })
         .sum())
