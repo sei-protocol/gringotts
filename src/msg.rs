@@ -157,5 +157,7 @@ pub struct UnbondingDelegationEntry {
 
 #[cw_serde]
 pub struct UnbondingDelegationsResponse {
-    pub entries: Vec<UnbondingDelegationEntry>,
+     // Sei returns {"entries":null} (Go nil slice) when there are no unbonding
+    // delegations; Option<Vec> accepts both null and a populated array.
+    pub entries: Option<Vec<UnbondingDelegationEntry>>,
 }
