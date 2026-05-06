@@ -144,6 +144,8 @@ The export converts:
 - Timestamps from nanoseconds to seconds
 - Amounts from usei (10^-6) to wei (10^-18)
 
+The exported vesting schedule is the current remaining CosmWasm schedule. It can include tranches whose timestamps have already passed but whose funds have not been withdrawn yet; the Solidity initializer accepts those tranches so they remain immediately withdrawable after deployment.
+
 ### Already Withdrawn Amounts
 
 If the CosmWasm contract has already had withdrawals:
@@ -151,14 +153,14 @@ If the CosmWasm contract has already had withdrawals:
 - `withdrawnLocked`: Tokens withdrawn via emergency withdrawal
 - `withdrawnStakingRewards`: Staking rewards withdrawn
 
-The vesting schedule in the export reflects the **original** schedule. You may need to adjust if tokens have already been withdrawn.
+The vesting schedule in the export reflects the remaining schedule stored by the CosmWasm contract. Review the withdrawn fields when deciding how much liquid SEI must be available for migration funding.
 
 ### Funding the Contract
 
-The Solidity contract requires the total vesting amount to be sent during deployment. Calculate:
+The Solidity contract requires the exported remaining vesting amount to be sent during deployment:
 
 ```
-fundingAmount = totalAmount - withdrawnUnlocked - withdrawnLocked
+fundingAmount = totalAmount
 ```
 
 ### Staking State

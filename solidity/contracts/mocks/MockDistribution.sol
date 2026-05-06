@@ -9,6 +9,8 @@ import "../../interfaces/IDistribution.sol";
  * @dev Mimics Sei's distribution precompile interface
  */
 contract MockDistribution is IDistribution {
+    uint256 private constant WEI_PER_USEI = 1e12;
+
     // delegator => withdraw address
     mapping(address => address) public withdrawAddresses;
     // delegator => validator => rewards
@@ -16,29 +18,42 @@ contract MockDistribution is IDistribution {
     // Track validators with rewards for each delegator
     mapping(address => string[]) internal _rewardValidators;
     mapping(address => mapping(string => bool)) internal _hasReward;
+    bool public setWithdrawAddressShouldFail;
+    bool public withdrawShouldFail;
+    uint256 public singleWithdrawCallCount;
+    uint256 public multipleWithdrawCallCount;
 
     // ============ Transaction Methods ============
 
     function setWithdrawAddress(address withdrawAddr) external override returns (bool) {
+        if (setWithdrawAddressShouldFail) {
+            return false;
+        }
         withdrawAddresses[msg.sender] = withdrawAddr;
         emit WithdrawAddressSet(msg.sender, withdrawAddr);
         return true;
     }
 
     function withdrawDelegationRewards(string memory validator) external override returns (bool) {
+        singleWithdrawCallCount++;
+        if (withdrawShouldFail) {
+            return false;
+        }
+
         uint256 amount = pendingRewards[msg.sender][validator];
-        if (amount > 0) {
-            pendingRewards[msg.sender][validator] = 0;
+        uint256 settledAmount = _toSettledWei(amount);
+        if (settledAmount > 0) {
+            pendingRewards[msg.sender][validator] = amount - settledAmount;
 
             address recipient = withdrawAddresses[msg.sender];
             if (recipient == address(0)) {
                 recipient = msg.sender;
             }
 
-            (bool success, ) = recipient.call{value: amount}("");
+            (bool success, ) = recipient.call{value: settledAmount}("");
             require(success, "Transfer failed");
 
-            emit DelegationRewardsWithdrawn(msg.sender, validator, amount);
+            emit DelegationRewardsWithdrawn(msg.sender, validator, settledAmount);
         }
         return true;
     }
@@ -46,6 +61,11 @@ contract MockDistribution is IDistribution {
     function withdrawMultipleDelegationRewards(
         string[] memory validators
     ) external override returns (bool) {
+        multipleWithdrawCallCount++;
+        if (withdrawShouldFail) {
+            return false;
+        }
+
         address recipient = withdrawAddresses[msg.sender];
         if (recipient == address(0)) {
             recipient = msg.sender;
@@ -56,10 +76,11 @@ contract MockDistribution is IDistribution {
 
         for (uint256 i = 0; i < validators.length; i++) {
             uint256 amount = pendingRewards[msg.sender][validators[i]];
-            if (amount > 0) {
-                pendingRewards[msg.sender][validators[i]] = 0;
-                amounts[i] = amount;
-                totalAmount += amount;
+            uint256 settledAmount = _toSettledWei(amount);
+            if (settledAmount > 0) {
+                pendingRewards[msg.sender][validators[i]] = amount - settledAmount;
+                amounts[i] = settledAmount;
+                totalAmount += settledAmount;
             }
         }
 
@@ -122,7 +143,19 @@ contract MockDistribution is IDistribution {
         pendingRewards[delegator][validator] = amount;
     }
 
+    function setSetWithdrawAddressSuccess(bool success) external {
+        setWithdrawAddressShouldFail = !success;
+    }
+
+    function setWithdrawSuccess(bool success) external {
+        withdrawShouldFail = !success;
+    }
+
     function fundRewards() external payable {}
+
+    function _toSettledWei(uint256 amount) internal pure returns (uint256) {
+        return (amount / WEI_PER_USEI) * WEI_PER_USEI;
+    }
 
     receive() external payable {}
 }

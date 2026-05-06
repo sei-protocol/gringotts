@@ -2,6 +2,50 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
+const STAKING_PRECOMPILE = "0x0000000000000000000000000000000000001005";
+const GOV_PRECOMPILE = "0x0000000000000000000000000000000000001006";
+const DISTRIBUTION_PRECOMPILE = "0x0000000000000000000000000000000000001007";
+const WEI_PER_USEI = 10n ** 12n;
+
+async function installPrecompileMocks() {
+  const MockStaking = await ethers.getContractFactory("MockStaking");
+  const stakingImpl = await MockStaking.deploy();
+  await stakingImpl.waitForDeployment();
+  await ethers.provider.send("hardhat_setCode", [
+    STAKING_PRECOMPILE,
+    await ethers.provider.getCode(await stakingImpl.getAddress())
+  ]);
+
+  const MockGov = await ethers.getContractFactory("MockGov");
+  const govImpl = await MockGov.deploy();
+  await govImpl.waitForDeployment();
+  await ethers.provider.send("hardhat_setCode", [
+    GOV_PRECOMPILE,
+    await ethers.provider.getCode(await govImpl.getAddress())
+  ]);
+
+  const MockDistribution = await ethers.getContractFactory("MockDistribution");
+  const distributionImpl = await MockDistribution.deploy();
+  await distributionImpl.waitForDeployment();
+  await ethers.provider.send("hardhat_setCode", [
+    DISTRIBUTION_PRECOMPILE,
+    await ethers.provider.getCode(await distributionImpl.getAddress())
+  ]);
+
+  const distribution = MockDistribution.attach(DISTRIBUTION_PRECOMPILE);
+  await distribution.fundRewards({ value: ethers.parseEther("10") });
+
+  return {
+    staking: MockStaking.attach(STAKING_PRECOMPILE),
+    gov: MockGov.attach(GOV_PRECOMPILE),
+    distribution
+  };
+}
+
+beforeEach(async function () {
+  await ethers.provider.send("hardhat_reset", []);
+});
+
 describe("Gringotts (Upgradeable)", function () {
   let admin1, admin2, admin3, admin4;
   let operator1, operator2;
@@ -33,6 +77,36 @@ describe("Gringotts (Upgradeable)", function () {
     };
   }
 
+  async function deployProxy(options = {}) {
+    const mocks = await installPrecompileMocks();
+    const schedule = options.schedule || await getSmallVestingSchedule();
+    const admins = options.admins || [admin1.address];
+    const operators = options.operators || [operator1.address];
+    const threshold = options.threshold ?? THRESHOLD_PERCENTAGE;
+
+    const Gringotts = await ethers.getContractFactory("Gringotts");
+    const initData = Gringotts.interface.encodeFunctionData("initialize", [
+      admins,
+      operators,
+      schedule.timestamps,
+      schedule.amounts,
+      unlockAddr.address,
+      rewardAddr.address,
+      ONE_HOUR,
+      threshold
+    ]);
+
+    const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
+    const proxy = await ERC1967Proxy.deploy(await implementation.getAddress(), initData, { value: schedule.total });
+    await proxy.waitForDeployment();
+
+    return {
+      gringotts: Gringotts.attach(await proxy.getAddress()),
+      mocks,
+      schedule
+    };
+  }
+
   describe("Implementation Deployment", function () {
     it("should deploy implementation with initializers disabled", async function () {
       // Implementation should not be initializable directly
@@ -55,6 +129,18 @@ describe("Gringotts (Upgradeable)", function () {
   });
 
   describe("Initialization Validation", function () {
+    it("should initialize successfully against fixed precompile mocks", async function () {
+      const { gringotts, mocks, schedule } = await deployProxy({
+        admins: [admin1.address, admin2.address],
+        operators: [operator1.address, operator2.address]
+      });
+
+      expect(await gringotts.totalAmount()).to.equal(schedule.total);
+      expect(Array.from(await gringotts.listAdmins())).to.have.members([admin1.address, admin2.address]);
+      expect(Array.from(await gringotts.listOperators())).to.have.members([operator1.address, operator2.address]);
+      expect(await mocks.distribution.withdrawAddresses(await gringotts.getAddress())).to.equal(rewardAddr.address);
+    });
+
     it("should fail with no admins", async function () {
       const { timestamps, amounts, total } = await getSmallVestingSchedule();
       const Gringotts = await ethers.getContractFactory("Gringotts");
@@ -267,25 +353,146 @@ describe("Gringotts (Upgradeable)", function () {
       ).to.be.revertedWithCustomError(Gringotts, "InvalidTranche");
     });
 
-    it("should fail with timestamp in the past", async function () {
+    it("should allow already-vested remaining migration tranches", async function () {
       const currentTime = await time.latest();
-      const Gringotts = await ethers.getContractFactory("Gringotts");
-      
-      const initData = Gringotts.interface.encodeFunctionData("initialize", [
-        [admin1.address],
-        [operator1.address],
-        [currentTime - ONE_DAY], // In the past
-        [ethers.parseEther("1")],
-        unlockAddr.address,
-        rewardAddr.address,
-        ONE_HOUR,
-        THRESHOLD_PERCENTAGE
-      ]);
+      const schedule = {
+        timestamps: [currentTime - ONE_DAY],
+        amounts: [ethers.parseEther("1")],
+        total: ethers.parseEther("1")
+      };
 
-      const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
+      const { gringotts } = await deployProxy({ schedule });
+      expect(await gringotts.getTotalVested()).to.equal(ethers.parseEther("1"));
+    });
+  });
+
+  describe("Role Enumeration", function () {
+    it("should keep admin and operator lists in sync with role changes", async function () {
+      const { gringotts } = await deployProxy({
+        admins: [admin1.address, admin2.address],
+        operators: [operator1.address],
+        threshold: 50
+      });
+
+      await gringotts.connect(admin1).updateOp(operator2.address, false);
+      expect(Array.from(await gringotts.listOperators())).to.have.members([operator1.address, operator2.address]);
+
+      await gringotts.connect(admin1).updateOp(operator1.address, true);
+      expect(Array.from(await gringotts.listOperators())).to.deep.equal([operator2.address]);
+
+      await gringotts.connect(admin1).proposeUpdateAdmin(admin3.address, false);
+      await gringotts.connect(admin1).processProposal(1);
+      expect(Array.from(await gringotts.listAdmins())).to.have.members([admin1.address, admin2.address, admin3.address]);
+
+      await gringotts.connect(admin1).proposeUpdateAdmin(admin2.address, true);
+      await gringotts.connect(admin2).voteProposal(2);
+      await gringotts.connect(admin1).processProposal(2);
+      expect(Array.from(await gringotts.listAdmins())).to.have.members([admin1.address, admin3.address]);
+      expect(await gringotts.isAdmin(admin2.address)).to.equal(false);
+    });
+  });
+
+  describe("Staking Unit Conversion", function () {
+    it("should expose a wei API and pass uSEI to redelegate and undelegate", async function () {
+      const { gringotts } = await deployProxy();
+
+      await gringotts.connect(operator1).delegate("val1", ethers.parseEther("1"));
+      let delegation = await gringotts.getDelegation("val1");
+      expect(delegation.balance.amount).to.equal(1_000_000n);
+
+      await expect(gringotts.connect(operator1).redelegate("val1", "val2", ethers.parseEther("0.4")))
+        .to.emit(gringotts, "Redelegated")
+        .withArgs("val1", "val2", ethers.parseEther("0.4"));
+
+      delegation = await gringotts.getDelegation("val1");
+      expect(delegation.balance.amount).to.equal(600_000n);
+      delegation = await gringotts.getDelegation("val2");
+      expect(delegation.balance.amount).to.equal(400_000n);
+
+      await expect(gringotts.connect(operator1).undelegate("val2", ethers.parseEther("0.25")))
+        .to.emit(gringotts, "Undelegated")
+        .withArgs("val2", ethers.parseEther("0.25"));
+
+      delegation = await gringotts.getDelegation("val2");
+      expect(delegation.balance.amount).to.equal(150_000n);
+    });
+
+    it("should reject staking operations below one uSEI or with fractional uSEI", async function () {
+      const { gringotts } = await deployProxy();
+
       await expect(
-        ERC1967Proxy.deploy(await implementation.getAddress(), initData, { value: ethers.parseEther("1") })
-      ).to.be.revertedWithCustomError(Gringotts, "InvalidTranche");
+        gringotts.connect(operator1).delegate("val1", WEI_PER_USEI - 1n)
+      ).to.be.revertedWithCustomError(gringotts, "InvalidStakingAmount");
+
+      await expect(
+        gringotts.connect(operator1).redelegate("val1", "val2", ethers.parseEther("1") + 1n)
+      ).to.be.revertedWithCustomError(gringotts, "InvalidStakingAmount");
+    });
+
+    it("should reconcile auto-withdrawn rewards while staked principal is reported in uSEI", async function () {
+      const { gringotts } = await deployProxy();
+
+      await gringotts.connect(operator1).delegate("val1", ethers.parseEther("1"));
+      await admin1.sendTransaction({ to: await gringotts.getAddress(), value: ethers.parseEther("0.5") });
+
+      await expect(gringotts.connect(operator1).initiateWithdrawReward([]))
+        .to.changeEtherBalances(
+          [gringotts, rewardAddr],
+          [-ethers.parseEther("0.5"), ethers.parseEther("0.5")]
+        );
+
+      const info = await gringotts.getInfo();
+      expect(info._withdrawnStakingRewards).to.equal(ethers.parseEther("0.5"));
+    });
+  });
+
+  describe("Reward Withdrawals", function () {
+    it("should skip zero and sub-uSEI rewards before calling the multi-withdraw precompile", async function () {
+      const { gringotts, mocks } = await deployProxy();
+      const contractAddress = await gringotts.getAddress();
+
+      await mocks.distribution.setRewards(contractAddress, "dust", WEI_PER_USEI - 1n);
+      await mocks.distribution.setRewards(contractAddress, "whole", 2n * WEI_PER_USEI + 123n);
+
+      await expect(gringotts.connect(operator1).initiateWithdrawReward(["dust", "whole", "whole"]))
+        .to.changeEtherBalance(rewardAddr, 2n * WEI_PER_USEI);
+
+      expect(await mocks.distribution.multipleWithdrawCallCount()).to.equal(1n);
+      expect(await mocks.distribution.pendingRewards(contractAddress, "dust")).to.equal(WEI_PER_USEI - 1n);
+      expect(await mocks.distribution.pendingRewards(contractAddress, "whole")).to.equal(123n);
+
+      const info = await gringotts.getInfo();
+      expect(info._withdrawnStakingRewards).to.equal(2n * WEI_PER_USEI);
+    });
+
+    it("should skip single-validator withdrawals below one uSEI", async function () {
+      const { gringotts, mocks } = await deployProxy();
+      const contractAddress = await gringotts.getAddress();
+
+      await mocks.distribution.setRewards(contractAddress, "dust", WEI_PER_USEI - 1n);
+      await gringotts.connect(operator1).withdrawSingleValidatorReward("dust");
+      expect(await mocks.distribution.singleWithdrawCallCount()).to.equal(0n);
+
+      await mocks.distribution.setRewards(contractAddress, "whole", WEI_PER_USEI);
+      await expect(gringotts.connect(operator1).withdrawSingleValidatorReward("whole"))
+        .to.changeEtherBalance(rewardAddr, WEI_PER_USEI);
+      expect(await mocks.distribution.singleWithdrawCallCount()).to.equal(1n);
+    });
+
+    it("should revert instead of accounting rewards when distribution returns false", async function () {
+      const { gringotts, mocks } = await deployProxy();
+      const contractAddress = await gringotts.getAddress();
+
+      await mocks.distribution.setRewards(contractAddress, "val1", WEI_PER_USEI);
+      await mocks.distribution.setWithdrawSuccess(false);
+
+      await expect(
+        gringotts.connect(operator1).initiateWithdrawReward(["val1"])
+      ).to.be.revertedWithCustomError(gringotts, "DistributionFailed");
+
+      await expect(
+        gringotts.connect(operator1).withdrawSingleValidatorReward("val1")
+      ).to.be.revertedWithCustomError(gringotts, "DistributionFailed");
     });
   });
 
@@ -369,28 +576,16 @@ describe("GringottsFactory (Upgradeable)", function () {
   });
 });
 
-// Mock-based tests for governance voting
 describe("Gringotts Governance Vote (Mock)", function () {
-  let MockGov;
-  
-  before(async function () {
-    // Get MockGov contract factory for interface usage
-    MockGov = await ethers.getContractFactory("MockGov");
-  });
-
-  it("should create a GovVote proposal with valid vote option", async function () {
-    // This test validates proposal creation logic without actual precompile
+  async function deployGovernanceSubject() {
+    await installPrecompileMocks();
     const [, admin1, operator1, unlockAddr, rewardAddr] = await ethers.getSigners();
-    
+    const currentTime = await time.latest();
+
     const Gringotts = await ethers.getContractFactory("Gringotts");
     const impl = await Gringotts.deploy();
     await impl.waitForDeployment();
-    
-    // We can't fully test on local network due to precompiles,
-    // but we can test the proposal validation
-    const currentTime = await time.latest();
-    
-    // Encode init data - will fail at setWithdrawAddress on local network
+
     const initData = Gringotts.interface.encodeFunctionData("initialize", [
       [admin1.address],
       [operator1.address],
@@ -402,41 +597,41 @@ describe("Gringotts Governance Vote (Mock)", function () {
       75
     ]);
 
-    // This will revert due to missing distribution precompile on local network
-    // but validates the code path up to that point
     const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
-    try {
-      await ERC1967Proxy.deploy(await impl.getAddress(), initData, { value: ethers.parseEther("1") });
-    } catch (e) {
-      // Expected to fail on local network due to precompile
-      expect(e.message).to.include("revert");
-    }
+    const proxy = await ERC1967Proxy.deploy(await impl.getAddress(), initData, { value: ethers.parseEther("1") });
+    await proxy.waitForDeployment();
+
+    return {
+      gringotts: Gringotts.attach(await proxy.getAddress()),
+      admin1
+    };
+  }
+
+  it("should create a GovVote proposal with valid vote option", async function () {
+    const { gringotts, admin1 } = await deployGovernanceSubject();
+
+    await expect(gringotts.connect(admin1).proposeGovVote(1, 1))
+      .to.emit(gringotts, "GovVoteProposed")
+      .withArgs(1, 1, 1);
+
+    const voteData = await gringotts.govVoteData(1);
+    expect(voteData.govProposalId).to.equal(1n);
+    expect(voteData.voteOption).to.equal(1);
   });
 
   it("should reject invalid vote options (< 1)", async function () {
-    const [, admin1] = await ethers.getSigners();
-    
-    const Gringotts = await ethers.getContractFactory("Gringotts");
-    const iface = Gringotts.interface;
-    
-    // Test encoding with invalid option - if this were called on a deployed contract
-    // it would revert with InvalidVoteOption
-    const govProposalId = 1n;
-    const invalidOption = 0; // Invalid - must be 1-4
-    
-    // This validates the function signature exists and accepts these params
-    const encoded = iface.encodeFunctionData("proposeGovVote", [govProposalId, invalidOption]);
-    expect(encoded).to.not.be.undefined;
+    const { gringotts, admin1 } = await deployGovernanceSubject();
+
+    await expect(
+      gringotts.connect(admin1).proposeGovVote(1, 0)
+    ).to.be.revertedWithCustomError(gringotts, "InvalidVoteOption");
   });
 
   it("should reject invalid vote options (> 4)", async function () {
-    const Gringotts = await ethers.getContractFactory("Gringotts");
-    const iface = Gringotts.interface;
-    
-    const govProposalId = 1n;
-    const invalidOption = 5; // Invalid - must be 1-4
-    
-    const encoded = iface.encodeFunctionData("proposeGovVote", [govProposalId, invalidOption]);
-    expect(encoded).to.not.be.undefined;
+    const { gringotts, admin1 } = await deployGovernanceSubject();
+
+    await expect(
+      gringotts.connect(admin1).proposeGovVote(1, 5)
+    ).to.be.revertedWithCustomError(gringotts, "InvalidVoteOption");
   });
 });

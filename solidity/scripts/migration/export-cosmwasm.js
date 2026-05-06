@@ -213,9 +213,9 @@ Example:
       migrationNotes: [
         'IMPORTANT: Convert all sei1... addresses to 0x... EVM addresses before deployment',
         'Use: seid q evm sei-addr <sei_address> to convert addresses',
-        'Verify the vesting schedule matches the original contract',
-        'The new contract will need to be funded with the correct SEI amount',
-        'Consider any already withdrawn amounts when funding the new contract'
+        'Verify the vesting schedule matches the current remaining contract state',
+        'Already-vested remaining tranches are preserved and should be immediately withdrawable after deployment',
+        'The new contract must be funded with totalAmount, the exported remaining principal'
       ]
     };
 

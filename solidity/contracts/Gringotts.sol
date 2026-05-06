@@ -61,6 +61,8 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
 
     uint256 private constant HUNDRED_YEARS_IN_SECONDS = 100 * 365 * 24 * 60 * 60;
     uint256 private constant PERCENTAGE_DENOMINATOR = 100;
+    uint256 private constant WEI_PER_USEI = 1e12;
+    string private constant SEI_DENOM = "usei";
 
     // Sei Precompile addresses
     IStaking public constant STAKING = IStaking(STAKING_PRECOMPILE_ADDRESS);
@@ -88,6 +90,10 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     uint256 public adminCount;
     mapping(address => bool) public operators;
     uint256 public operatorCount;
+    address[] private adminList;
+    address[] private operatorList;
+    mapping(address => uint256) private adminListIndexPlusOne;
+    mapping(address => uint256) private operatorListIndexPlusOne;
 
     // Voting configuration
     uint256 public maxVotingPeriod;
@@ -152,6 +158,8 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     error InvalidVoteOption();
     error GovVoteFailed();
     error SetWithdrawAddressFailed();
+    error DistributionFailed();
+    error InvalidStakingAmount();
 
     // ============ Modifiers ============
 
@@ -220,18 +228,14 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         for (uint256 i = 0; i < _admins.length; i++) {
             if (_admins[i] == address(0)) revert ZeroAddress();
             if (admins[_admins[i]]) revert DuplicateAddress();
-            admins[_admins[i]] = true;
-            adminCount++;
-            emit AdminAdded(_admins[i]);
+            _addAdmin(_admins[i]);
         }
 
         // Set operators (check for duplicates)
         for (uint256 i = 0; i < _operators.length; i++) {
             if (_operators[i] == address(0)) revert ZeroAddress();
             if (operators[_operators[i]]) revert DuplicateAddress();
-            operators[_operators[i]] = true;
-            operatorCount++;
-            emit OperatorAdded(_operators[i]);
+            _addOperator(_operators[i]);
         }
 
         // Set distribution precompile to send rewards to stakingRewardAddress
@@ -244,9 +248,10 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     /**
      * @notice Delegate SEI to a validator using Sei's staking precompile
      * @param validator The validator's Sei address (e.g., "seivaloper1...")
-     * @param amount The amount to delegate (in wei)
+     * @param amount The amount to delegate (in wei, must be a whole uSEI)
      */
     function delegate(string calldata validator, uint256 amount) external onlyOperator nonReentrant {
+        _requireWholeUsei(amount);
         bool success = STAKING.delegate{value: amount}(validator);
         if (!success) revert StakingFailed();
         emit Delegated(validator, amount);
@@ -256,14 +261,14 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
      * @notice Redelegate SEI from one validator to another
      * @param srcValidator Source validator's Sei address
      * @param dstValidator Destination validator's Sei address
-     * @param amount Amount to redelegate (in wei)
+     * @param amount Amount to redelegate (in wei, converted to uSEI for the precompile)
      */
     function redelegate(
         string calldata srcValidator,
         string calldata dstValidator,
         uint256 amount
     ) external onlyOperator nonReentrant {
-        bool success = STAKING.redelegate(srcValidator, dstValidator, amount);
+        bool success = STAKING.redelegate(srcValidator, dstValidator, _weiToUsei(amount));
         if (!success) revert StakingFailed();
         emit Redelegated(srcValidator, dstValidator, amount);
     }
@@ -271,10 +276,10 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     /**
      * @notice Undelegate SEI from a validator
      * @param validator The validator's Sei address
-     * @param amount Amount to undelegate (in wei)
+     * @param amount Amount to undelegate (in wei, converted to uSEI for the precompile)
      */
     function undelegate(string calldata validator, uint256 amount) external onlyOperator nonReentrant {
-        bool success = STAKING.undelegate(validator, amount);
+        bool success = STAKING.undelegate(validator, _weiToUsei(amount));
         if (!success) revert StakingFailed();
         emit Undelegated(validator, amount);
     }
@@ -298,8 +303,6 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
      * @param validators Array of validator addresses to withdraw rewards from
      */
     function initiateWithdrawReward(string[] calldata validators) external onlyOperator nonReentrant {
-        uint256 balanceBefore = address(this).balance;
-
         // First, send any rewards already in contract balance (from auto-withdrawals)
         uint256 existingRewards = _calculateWithdrawnRewards();
         if (existingRewards > 0) {
@@ -307,16 +310,43 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
             if (!success) revert TransferFailed();
         }
 
-        // Withdraw rewards from validators using distribution precompile
-        // Rewards go directly to stakingRewardAddress (set in initialize)
+        uint256 totalWithdrawn = existingRewards;
+
         if (validators.length > 0) {
-            DISTRIBUTION.withdrawMultipleDelegationRewards(validators);
+            IDistribution.Rewards memory rewardsInfo = DISTRIBUTION.rewards(address(this));
+            string[] memory eligibleValidators = new string[](validators.length);
+            uint256 eligibleCount = 0;
+            uint256 withdrawableRewards = 0;
+
+            for (uint256 i = 0; i < validators.length; i++) {
+                if (_containsValidator(eligibleValidators, eligibleCount, validators[i])) {
+                    continue;
+                }
+
+                uint256 validatorRewards = _getValidatorWithdrawableRewards(rewardsInfo, validators[i]);
+                if (validatorRewards > 0) {
+                    eligibleValidators[eligibleCount] = validators[i];
+                    eligibleCount++;
+                    withdrawableRewards += validatorRewards;
+                }
+            }
+
+            if (eligibleCount > 0) {
+                string[] memory validatorsToWithdraw = new string[](eligibleCount);
+                for (uint256 i = 0; i < eligibleCount; i++) {
+                    validatorsToWithdraw[i] = eligibleValidators[i];
+                }
+
+                bool success = DISTRIBUTION.withdrawMultipleDelegationRewards(validatorsToWithdraw);
+                if (!success) revert DistributionFailed();
+                totalWithdrawn += withdrawableRewards;
+            }
         }
 
-        uint256 totalWithdrawn = balanceBefore - address(this).balance;
-        withdrawnStakingRewards += totalWithdrawn;
-
-        emit StakingRewardsWithdrawn(stakingRewardAddress, totalWithdrawn);
+        if (totalWithdrawn > 0) {
+            withdrawnStakingRewards += totalWithdrawn;
+            emit StakingRewardsWithdrawn(stakingRewardAddress, totalWithdrawn);
+        }
     }
 
     /**
@@ -326,14 +356,16 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     function withdrawSingleValidatorReward(string calldata validator) external onlyOperator nonReentrant {
         // Query pending rewards for this validator before withdrawal
         uint256 pendingRewards = _getValidatorPendingRewards(validator);
+        if (pendingRewards == 0) {
+            return;
+        }
 
         // Rewards go directly to stakingRewardAddress (set in initialize)
-        DISTRIBUTION.withdrawDelegationRewards(validator);
+        bool success = DISTRIBUTION.withdrawDelegationRewards(validator);
+        if (!success) revert DistributionFailed();
 
-        if (pendingRewards > 0) {
-            withdrawnStakingRewards += pendingRewards;
-            emit StakingRewardsWithdrawn(stakingRewardAddress, pendingRewards);
-        }
+        withdrawnStakingRewards += pendingRewards;
+        emit StakingRewardsWithdrawn(stakingRewardAddress, pendingRewards);
     }
 
     // ============ Admin Functions ============
@@ -347,17 +379,9 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         if (op == address(0)) revert ZeroAddress();
 
         if (remove) {
-            if (operators[op]) {
-                operators[op] = false;
-                operatorCount--;
-                emit OperatorRemoved(op);
-            }
+            _removeOperator(op);
         } else {
-            if (!operators[op]) {
-                operators[op] = true;
-                operatorCount++;
-                emit OperatorAdded(op);
-            }
+            _addOperator(op);
         }
     }
 
@@ -637,6 +661,20 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     }
 
     /**
+     * @notice List current admins
+     */
+    function listAdmins() external view returns (address[] memory) {
+        return adminList;
+    }
+
+    /**
+     * @notice List current operators
+     */
+    function listOperators() external view returns (address[] memory) {
+        return operatorList;
+    }
+
+    /**
      * @notice Get the current implementation address
      */
     function getImplementation() external view returns (address) {
@@ -706,9 +744,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
             if (_timestamps[i] <= lastTimestamp) {
                 revert InvalidTranche("vesting schedule must be monotonic increasing");
             }
-            if (_timestamps[i] < block.timestamp) {
-                revert InvalidTranche("timestamp is in the past");
-            }
+            // Migration exports can include already-vested tranches that have not been withdrawn yet.
             if (_timestamps[i] > block.timestamp + HUNDRED_YEARS_IN_SECONDS) {
                 revert InvalidTranche("timestamp is too far in the future");
             }
@@ -772,18 +808,9 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
 
     function _executeUpdateAdmin(address admin, bool remove) internal {
         if (remove) {
-            if (admins[admin]) {
-                if (adminCount <= 1) revert CannotRemoveLastAdmin();
-                admins[admin] = false;
-                adminCount--;
-                emit AdminRemoved(admin);
-            }
+            _removeAdmin(admin);
         } else {
-            if (!admins[admin]) {
-                admins[admin] = true;
-                adminCount++;
-                emit AdminAdded(admin);
-            }
+            _addAdmin(admin);
         }
     }
 
@@ -922,7 +949,9 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
             IStaking.DelegationsResponse memory response = STAKING.delegatorDelegations(address(this), nextKey);
             
             for (uint256 i = 0; i < response.delegations.length; i++) {
-                total += response.delegations[i].balance.amount;
+                if (_stringsEqual(response.delegations[i].balance.denom, SEI_DENOM)) {
+                    total += _useiToWei(response.delegations[i].balance.amount);
+                }
             }
             
             nextKey = response.nextKey;
@@ -943,7 +972,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
             
             for (uint256 i = 0; i < response.unbondingDelegations.length; i++) {
                 for (uint256 j = 0; j < response.unbondingDelegations[i].entries.length; j++) {
-                    total += _stringToUint(response.unbondingDelegations[i].entries[j].balance);
+                    total += _useiToWei(_stringToUint(response.unbondingDelegations[i].entries[j].balance));
                 }
             }
             
@@ -997,23 +1026,139 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         IDistribution.Rewards memory rewardsInfo = DISTRIBUTION.rewards(address(this));
         uint256 total = 0;
         for (uint256 i = 0; i < rewardsInfo.total.length; i++) {
-            total += rewardsInfo.total[i].amount;
+            total += _coinAmountToWei(rewardsInfo.total[i]);
         }
-        return total;
+        return _truncateToUseiWei(total);
     }
 
     function _getValidatorPendingRewards(string calldata validator) internal view returns (uint256) {
         IDistribution.Rewards memory rewardsInfo = DISTRIBUTION.rewards(address(this));
+        return _getValidatorWithdrawableRewards(rewardsInfo, validator);
+    }
+
+    function _getValidatorWithdrawableRewards(
+        IDistribution.Rewards memory rewardsInfo,
+        string memory validator
+    ) internal pure returns (uint256) {
         for (uint256 i = 0; i < rewardsInfo.rewards.length; i++) {
             if (_stringsEqual(rewardsInfo.rewards[i].validator_address, validator)) {
                 uint256 total = 0;
                 for (uint256 j = 0; j < rewardsInfo.rewards[i].coins.length; j++) {
-                    total += rewardsInfo.rewards[i].coins[j].amount;
+                    total += _coinAmountToWei(rewardsInfo.rewards[i].coins[j]);
                 }
-                return total;
+                return _truncateToUseiWei(total);
             }
         }
         return 0;
+    }
+
+    function _coinAmountToWei(IDistribution.Coin memory coin) internal pure returns (uint256) {
+        if (!_stringsEqual(coin.denom, SEI_DENOM)) {
+            return 0;
+        }
+        if (coin.decimals == 18) {
+            return coin.amount;
+        }
+        if (coin.decimals < 18) {
+            return coin.amount * (10 ** (18 - coin.decimals));
+        }
+        uint256 decimalsToRemove = coin.decimals - 18;
+        if (decimalsToRemove > 77) {
+            return 0;
+        }
+        return coin.amount / (10 ** decimalsToRemove);
+    }
+
+    function _truncateToUseiWei(uint256 amountWei) internal pure returns (uint256) {
+        return (amountWei / WEI_PER_USEI) * WEI_PER_USEI;
+    }
+
+    function _requireWholeUsei(uint256 amountWei) internal pure {
+        if (amountWei == 0 || amountWei % WEI_PER_USEI != 0) revert InvalidStakingAmount();
+    }
+
+    function _weiToUsei(uint256 amountWei) internal pure returns (uint256) {
+        _requireWholeUsei(amountWei);
+        return amountWei / WEI_PER_USEI;
+    }
+
+    function _useiToWei(uint256 amountUsei) internal pure returns (uint256) {
+        return amountUsei * WEI_PER_USEI;
+    }
+
+    function _containsValidator(
+        string[] memory validators,
+        uint256 length,
+        string calldata validator
+    ) internal pure returns (bool) {
+        for (uint256 i = 0; i < length; i++) {
+            if (_stringsEqual(validators[i], validator)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function _addAdmin(address admin) internal {
+        if (admins[admin]) {
+            return;
+        }
+        admins[admin] = true;
+        adminCount++;
+        adminList.push(admin);
+        adminListIndexPlusOne[admin] = adminList.length;
+        emit AdminAdded(admin);
+    }
+
+    function _removeAdmin(address admin) internal {
+        if (!admins[admin]) {
+            return;
+        }
+        if (adminCount <= 1) revert CannotRemoveLastAdmin();
+
+        admins[admin] = false;
+        adminCount--;
+        _removeAddressFromList(adminList, adminListIndexPlusOne, admin);
+        emit AdminRemoved(admin);
+    }
+
+    function _addOperator(address operator) internal {
+        if (operators[operator]) {
+            return;
+        }
+        operators[operator] = true;
+        operatorCount++;
+        operatorList.push(operator);
+        operatorListIndexPlusOne[operator] = operatorList.length;
+        emit OperatorAdded(operator);
+    }
+
+    function _removeOperator(address operator) internal {
+        if (!operators[operator]) {
+            return;
+        }
+        operators[operator] = false;
+        operatorCount--;
+        _removeAddressFromList(operatorList, operatorListIndexPlusOne, operator);
+        emit OperatorRemoved(operator);
+    }
+
+    function _removeAddressFromList(
+        address[] storage list,
+        mapping(address => uint256) storage indexPlusOne,
+        address account
+    ) internal {
+        uint256 index = indexPlusOne[account] - 1;
+        uint256 lastIndex = list.length - 1;
+
+        if (index != lastIndex) {
+            address last = list[lastIndex];
+            list[index] = last;
+            indexPlusOne[last] = index + 1;
+        }
+
+        list.pop();
+        delete indexPlusOne[account];
     }
 
     function _stringsEqual(string memory a, string memory b) internal pure returns (bool) {
@@ -1065,5 +1210,5 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
      * @dev Reserved storage space for future upgrades
      * This allows adding new state variables in upgrades without shifting existing storage
      */
-    uint256[50] private __gap;
+    uint256[46] private __gap;
 }

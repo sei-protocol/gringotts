@@ -9,6 +9,8 @@ import "../../interfaces/IStaking.sol";
  * @dev Mimics Sei's staking precompile interface
  */
 contract MockStaking is IStaking {
+    uint256 private constant WEI_PER_USEI = 1e12;
+
     // delegator => validator string => delegation info
     mapping(address => mapping(string => DelegationInfo)) internal _delegations;
     // delegator => validators list
@@ -34,16 +36,18 @@ contract MockStaking is IStaking {
 
     function delegate(string memory valAddr) external payable override returns (bool) {
         require(msg.value > 0, "No value sent");
+        require(msg.value % WEI_PER_USEI == 0, "Not whole uSEI");
+        uint256 amountUsei = msg.value / WEI_PER_USEI;
 
         if (!_validatorExists[msg.sender][valAddr]) {
             _delegatorValidators[msg.sender].push(valAddr);
             _validatorExists[msg.sender][valAddr] = true;
         }
 
-        _delegations[msg.sender][valAddr].amount += msg.value;
-        _delegations[msg.sender][valAddr].shares += msg.value;
+        _delegations[msg.sender][valAddr].amount += amountUsei;
+        _delegations[msg.sender][valAddr].shares += amountUsei;
 
-        emit Delegate(msg.sender, valAddr, msg.value);
+        emit Delegate(msg.sender, valAddr, amountUsei);
         return true;
     }
 
@@ -80,7 +84,7 @@ contract MockStaking is IStaking {
         _unbondings[msg.sender][valAddr].completionTime = int64(int256(block.timestamp + 21 days));
 
         // For testing, immediately return the funds
-        (bool success, ) = msg.sender.call{value: amount}("");
+        (bool success, ) = msg.sender.call{value: amount * WEI_PER_USEI}("");
         require(success, "Transfer failed");
 
         emit Undelegate(msg.sender, valAddr, amount);

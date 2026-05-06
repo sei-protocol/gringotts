@@ -135,7 +135,7 @@ interface IStaking {
      * @notice Redelegate tokens from one validator to another
      * @param srcAddress The source validator address
      * @param dstAddress The destination validator address
-     * @param amount Amount to redelegate in base units
+     * @param amount Amount to redelegate in uSEI (6-decimal micro-SEI)
      * @return success True if redelegation was successful
      */
     function redelegate(
@@ -147,7 +147,7 @@ interface IStaking {
     /**
      * @notice Undelegate tokens from a validator
      * @param valAddress The validator address to undelegate from
-     * @param amount Amount to undelegate in base units
+     * @param amount Amount to undelegate in uSEI (6-decimal micro-SEI)
      * @return success True if undelegation was successful
      */
     function undelegate(string memory valAddress, uint256 amount) external returns (bool success);

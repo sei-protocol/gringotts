@@ -165,14 +165,14 @@ const gringotts = Gringotts.attach(proxy.address);
 
 | Function | Description |
 |----------|-------------|
-| `delegate(string validator, uint256 amount)` | Delegate SEI to a validator |
-| `redelegate(string src, string dst, uint256 amount)` | Move delegation between validators |
-| `undelegate(string validator, uint256 amount)` | Remove delegation from a validator |
+| `delegate(string validator, uint256 amount)` | Delegate SEI to a validator; `amount` is wei and must be a whole uSEI |
+| `redelegate(string src, string dst, uint256 amount)` | Move delegation between validators; `amount` is wei and converted to uSEI for the precompile |
+| `undelegate(string validator, uint256 amount)` | Remove delegation from a validator; `amount` is wei and converted to uSEI for the precompile |
 | `initiateWithdrawUnlocked(uint256 amount)` | Withdraw vested tokens |
 | `initiateWithdrawReward(string[] validators)` | Withdraw staking rewards |
 | `withdrawSingleValidatorReward(string validator)` | Withdraw from one validator |
 
-**Note:** Validator addresses use Sei format: `seivaloper1...`
+**Note:** Validator addresses use Sei format: `seivaloper1...`. Public Gringotts amount parameters are wei-facing, but Sei staking redelegate/undelegate precompile calls and staking balance queries use uSEI. Gringotts converts at that boundary and rejects staking amounts that are not a whole uSEI.
 
 ### Admin Functions
 
@@ -200,6 +200,7 @@ const gringotts = Gringotts.attach(proxy.address);
 | `getAllDelegations()` | Get all delegations |
 | `getUnbondingDelegations()` | Get unbonding info |
 | `getPendingRewards()` | Get pending staking rewards |
+| `listAdmins()` / `listOperators()` | List current role members |
 | `isAdmin(address)` / `isOperator(address)` | Check roles |
 | `getImplementation()` | Get current implementation address |
 
@@ -210,8 +211,8 @@ const gringotts = Gringotts.attach(proxy.address);
 ```solidity
 // Delegation operations
 function delegate(string memory validator) external payable returns (bool);
-function redelegate(string memory src, string memory dst, uint256 amount) external returns (bool);
-function undelegate(string memory validator, uint256 amount) external returns (bool);
+function redelegate(string memory src, string memory dst, uint256 amountUsei) external returns (bool);
+function undelegate(string memory validator, uint256 amountUsei) external returns (bool);
 
 // Queries
 function delegation(address delegator, string memory validator) external view returns (Delegation memory);
