@@ -45,6 +45,14 @@ function docker(args, options = {}) {
   return result.stdout;
 }
 
+function dockerIgnoreErrors(args, options = {}) {
+  spawnSync("docker", args, {
+    encoding: "utf8",
+    input: options.input,
+    stdio: options.stdio || ["ignore", "ignore", "ignore"],
+  });
+}
+
 function runSeid(home, args, options = {}) {
   const interactive = options.input ? ["-i"] : [];
   return docker([
@@ -58,6 +66,24 @@ function runSeid(home, args, options = {}) {
     DEFAULT_IMAGE,
     ...args,
   ], options);
+}
+
+function makeHomeWritable(home) {
+  docker([
+    "run",
+    "--rm",
+    "-v",
+    `${home}:/root/.sei`,
+    "--entrypoint",
+    "sh",
+    DEFAULT_IMAGE,
+    "-c",
+    "chmod -R 777 /root/.sei",
+  ], { stdio: "ignore" });
+}
+
+function removeContainer(containerName) {
+  dockerIgnoreErrors(["rm", "-f", containerName]);
 }
 
 async function getFreePort() {
@@ -197,139 +223,150 @@ async function startSeiLocalNode() {
   const restPort = await getFreePort();
   const containerName = `gringotts-sei-${process.pid}-${Date.now()}`;
 
-  runSeid(home, ["init", "gringotts", "--chain-id", CHAIN_ID, "--overwrite"]);
+  try {
+    runSeid(home, ["init", "gringotts", "--chain-id", CHAIN_ID, "--overwrite"]);
+    makeHomeWritable(home);
 
-  const accounts = {};
-  for (const [name, index] of ACCOUNT_SPECS) {
+    const accounts = {};
+    for (const [name, index] of ACCOUNT_SPECS) {
+      runSeid(home, [
+        "keys",
+        "add",
+        name,
+        "--recover",
+        "--index",
+        String(index),
+        "--keyring-backend",
+        "test",
+        "--output",
+        "json",
+      ], { input: `${MNEMONIC}\n` });
+
+      const wallet = deriveWallet(index);
+      accounts[name] = {
+        address: wallet.address,
+        privateKey: wallet.privateKey,
+        index,
+      };
+    }
+
+    for (const [name] of ACCOUNT_SPECS) {
+      runSeid(home, [
+        "add-genesis-account",
+        name,
+        BALANCE,
+        "--keyring-backend",
+        "test",
+      ]);
+    }
+
     runSeid(home, [
-      "keys",
-      "add",
-      name,
-      "--recover",
-      "--index",
-      String(index),
-      "--keyring-backend",
-      "test",
-      "--output",
-      "json",
-    ], { input: `${MNEMONIC}\n` });
-
-    const wallet = deriveWallet(index);
-    accounts[name] = {
-      address: wallet.address,
-      privateKey: wallet.privateKey,
-      index,
-    };
-  }
-
-  for (const [name] of ACCOUNT_SPECS) {
-    runSeid(home, [
-      "add-genesis-account",
-      name,
-      BALANCE,
+      "gentx",
+      "validator",
+      "7000000000000000usei",
+      "--chain-id",
+      CHAIN_ID,
       "--keyring-backend",
       "test",
     ]);
+
+    makeHomeWritable(home);
+    updateGenesis(home);
+    runSeid(home, ["collect-gentxs"]);
+    makeHomeWritable(home);
+    updateConfig(home);
+
+    const validatorAddress = runSeid(home, [
+      "keys",
+      "show",
+      "validator",
+      "--bech=val",
+      "-a",
+      "--keyring-backend",
+      "test",
+    ]).trim();
+
+    docker([
+      "run",
+      "-d",
+      "--name",
+      containerName,
+      "-p",
+      `127.0.0.1:${evmPort}:8545`,
+      "-p",
+      `127.0.0.1:${tendermintPort}:26657`,
+      "-p",
+      `127.0.0.1:${restPort}:1317`,
+      "-v",
+      `${home}:/root/.sei`,
+      "--entrypoint",
+      "seid",
+      DEFAULT_IMAGE,
+      "start",
+      "--chain-id",
+      CHAIN_ID,
+      "--home",
+      "/root/.sei",
+    ]);
+
+    const evmRpcUrl = `http://127.0.0.1:${evmPort}`;
+    await waitForEvm(evmRpcUrl);
+
+    return {
+      image: DEFAULT_IMAGE,
+      containerName,
+      home,
+      evmRpcUrl,
+      tendermintRpcUrl: `http://127.0.0.1:${tendermintPort}`,
+      restUrl: `http://127.0.0.1:${restPort}`,
+      accounts,
+      validatorAddress,
+      cleanup() {
+        removeContainer(containerName);
+        makeHomeWritable(home);
+        fs.rmSync(home, { recursive: true, force: true });
+      },
+      submitGovProposal({ title = "Gringotts test proposal", description = "test" } = {}) {
+        const output = docker([
+          "exec",
+          containerName,
+          "seid",
+          "tx",
+          "gov",
+          "submit-proposal",
+          "--title",
+          title,
+          "--description",
+          description,
+          "--type",
+          "Text",
+          "--deposit",
+          "1000000usei",
+          "--from",
+          "funder",
+          "--keyring-backend",
+          "test",
+          "--chain-id",
+          CHAIN_ID,
+          "--node",
+          "tcp://localhost:26657",
+          "--fees",
+          "20000usei",
+          "-y",
+          "-b",
+          "block",
+          "-o",
+          "json",
+        ]);
+        return parseProposalId(output);
+      },
+    };
+  } catch (error) {
+    removeContainer(containerName);
+    makeHomeWritable(home);
+    fs.rmSync(home, { recursive: true, force: true });
+    throw error;
   }
-
-  runSeid(home, [
-    "gentx",
-    "validator",
-    "7000000000000000usei",
-    "--chain-id",
-    CHAIN_ID,
-    "--keyring-backend",
-    "test",
-  ]);
-
-  updateGenesis(home);
-  runSeid(home, ["collect-gentxs"]);
-  updateConfig(home);
-
-  const validatorAddress = runSeid(home, [
-    "keys",
-    "show",
-    "validator",
-    "--bech=val",
-    "-a",
-    "--keyring-backend",
-    "test",
-  ]).trim();
-
-  docker([
-    "run",
-    "-d",
-    "--name",
-    containerName,
-    "-p",
-    `127.0.0.1:${evmPort}:8545`,
-    "-p",
-    `127.0.0.1:${tendermintPort}:26657`,
-    "-p",
-    `127.0.0.1:${restPort}:1317`,
-    "-v",
-    `${home}:/root/.sei`,
-    "--entrypoint",
-    "seid",
-    DEFAULT_IMAGE,
-    "start",
-    "--chain-id",
-    CHAIN_ID,
-    "--home",
-    "/root/.sei",
-  ]);
-
-  const evmRpcUrl = `http://127.0.0.1:${evmPort}`;
-  await waitForEvm(evmRpcUrl);
-
-  return {
-    image: DEFAULT_IMAGE,
-    containerName,
-    home,
-    evmRpcUrl,
-    tendermintRpcUrl: `http://127.0.0.1:${tendermintPort}`,
-    restUrl: `http://127.0.0.1:${restPort}`,
-    accounts,
-    validatorAddress,
-    cleanup() {
-      docker(["rm", "-f", containerName], { stdio: "ignore" });
-      fs.rmSync(home, { recursive: true, force: true });
-    },
-    submitGovProposal({ title = "Gringotts test proposal", description = "test" } = {}) {
-      const output = docker([
-        "exec",
-        containerName,
-        "seid",
-        "tx",
-        "gov",
-        "submit-proposal",
-        "--title",
-        title,
-        "--description",
-        description,
-        "--type",
-        "Text",
-        "--deposit",
-        "1000000usei",
-        "--from",
-        "funder",
-        "--keyring-backend",
-        "test",
-        "--chain-id",
-        CHAIN_ID,
-        "--node",
-        "tcp://localhost:26657",
-        "--fees",
-        "20000usei",
-        "-y",
-        "-b",
-        "block",
-        "-o",
-        "json",
-      ]);
-      return parseProposalId(output);
-    },
-  };
 }
 
 module.exports = {
