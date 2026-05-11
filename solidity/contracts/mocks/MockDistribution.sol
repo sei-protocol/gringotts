@@ -10,6 +10,7 @@ import "../../interfaces/IDistribution.sol";
  */
 contract MockDistribution is IDistribution {
     uint256 private constant WEI_PER_USEI = 1e12;
+    uint256 private constant DECIMAL_USEI_PER_WEI = 1e6;
 
     // delegator => withdraw address
     mapping(address => address) public withdrawAddresses;
@@ -40,20 +41,32 @@ contract MockDistribution is IDistribution {
             return false;
         }
 
-        uint256 amount = pendingRewards[msg.sender][validator];
+        return _withdrawDelegationRewards(msg.sender, validator);
+    }
+
+    function autoWithdrawDelegationRewards(address delegator, string memory validator) external returns (bool) {
+        if (withdrawShouldFail) {
+            return false;
+        }
+
+        return _withdrawDelegationRewards(delegator, validator);
+    }
+
+    function _withdrawDelegationRewards(address delegator, string memory validator) internal returns (bool) {
+        uint256 amount = pendingRewards[delegator][validator];
         uint256 settledAmount = _toSettledWei(amount);
         if (settledAmount > 0) {
-            pendingRewards[msg.sender][validator] = amount - settledAmount;
+            pendingRewards[delegator][validator] = amount - settledAmount;
 
-            address recipient = withdrawAddresses[msg.sender];
+            address recipient = withdrawAddresses[delegator];
             if (recipient == address(0)) {
-                recipient = msg.sender;
+                recipient = delegator;
             }
 
             (bool success, ) = recipient.call{value: settledAmount}("");
             require(success, "Transfer failed");
 
-            emit DelegationRewardsWithdrawn(msg.sender, validator, settledAmount);
+            emit DelegationRewardsWithdrawn(delegator, validator, settledAmount);
         }
         return true;
     }
@@ -119,7 +132,7 @@ contract MockDistribution is IDistribution {
             uint256 amount = pendingRewards[delegator][vals[i]];
             if (amount > 0) {
                 Coin[] memory coins = new Coin[](1);
-                coins[0] = Coin({amount: amount, decimals: 18, denom: "usei"});
+                coins[0] = Coin({amount: _toDecimalUsei(amount), decimals: 18, denom: "usei"});
 
                 rewardInfos[idx] = Reward({coins: coins, validator_address: vals[i]});
                 totalRewards += amount;
@@ -128,7 +141,7 @@ contract MockDistribution is IDistribution {
         }
 
         Coin[] memory total = new Coin[](1);
-        total[0] = Coin({amount: totalRewards, decimals: 18, denom: "usei"});
+        total[0] = Coin({amount: _toDecimalUsei(totalRewards), decimals: 18, denom: "usei"});
 
         return Rewards({rewards: rewardInfos, total: total});
     }
@@ -155,6 +168,10 @@ contract MockDistribution is IDistribution {
 
     function _toSettledWei(uint256 amount) internal pure returns (uint256) {
         return (amount / WEI_PER_USEI) * WEI_PER_USEI;
+    }
+
+    function _toDecimalUsei(uint256 amountWei) internal pure returns (uint256) {
+        return amountWei * DECIMAL_USEI_PER_WEI;
     }
 
     receive() external payable {}

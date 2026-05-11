@@ -62,6 +62,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     uint256 private constant HUNDRED_YEARS_IN_SECONDS = 100 * 365 * 24 * 60 * 60;
     uint256 private constant PERCENTAGE_DENOMINATOR = 100;
     uint256 private constant WEI_PER_USEI = 1e12;
+    uint256 private constant DECIMAL_USEI_PER_WEI = 1e6;
     string private constant SEI_DENOM = "usei";
 
     // Sei Precompile addresses
@@ -94,6 +95,10 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     address[] private operatorList;
     mapping(address => uint256) private adminListIndexPlusOne;
     mapping(address => uint256) private operatorListIndexPlusOne;
+    string[] private trackedValidatorList;
+    mapping(bytes32 => uint256) private trackedValidatorIndexPlusOne;
+    mapping(bytes32 => uint256) private trackedStakedUsei;
+    mapping(bytes32 => uint256) private trackedUnbondingUsei;
 
     // Voting configuration
     uint256 public maxVotingPeriod;
@@ -144,6 +149,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     error InvalidTranche(string reason);
     error ProposalNotOpen();
     error ProposalExpired();
+    error ProposalNotFound();
     error AlreadyVoted();
     error WrongExecuteStatus();
     error NoSufficientUnlockedTokens();
@@ -238,9 +244,10 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
             _addOperator(_operators[i]);
         }
 
-        // Set distribution precompile to send rewards to stakingRewardAddress
-        bool success = DISTRIBUTION.setWithdrawAddress(_stakingRewardAddress);
-        if (!success) revert SetWithdrawAddressFailed();
+        // The distribution withdraw address is set by the
+        // UpdateStakingRewardDistributionAddress proposal after deployment.
+        // Calling the precompile from ERC1967Proxy construction fails on Sei
+        // because the proxy address is not associated until its code exists.
     }
 
     // ============ Operator Functions ============
@@ -252,8 +259,15 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
      */
     function delegate(string calldata validator, uint256 amount) external onlyOperator nonReentrant {
         _requireWholeUsei(amount);
+        uint256 pendingRewards = _getValidatorPendingRewards(validator);
+        uint256 amountUsei = amount / WEI_PER_USEI;
+
         bool success = STAKING.delegate{value: amount}(validator);
         if (!success) revert StakingFailed();
+
+        bytes32 validatorKey = _trackValidator(validator);
+        trackedStakedUsei[validatorKey] += amountUsei;
+        _recordWithdrawnStakingRewards(pendingRewards);
         emit Delegated(validator, amount);
     }
 
@@ -268,8 +282,22 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         string calldata dstValidator,
         uint256 amount
     ) external onlyOperator nonReentrant {
-        bool success = STAKING.redelegate(srcValidator, dstValidator, _weiToUsei(amount));
+        uint256 amountUsei = _weiToUsei(amount);
+        uint256 pendingRewards = _getValidatorPendingRewards(srcValidator);
+        if (!_stringsEqual(srcValidator, dstValidator)) {
+            pendingRewards += _getValidatorPendingRewards(dstValidator);
+        }
+
+        bool success = STAKING.redelegate(srcValidator, dstValidator, amountUsei);
         if (!success) revert StakingFailed();
+
+        bytes32 srcKey = _trackValidator(srcValidator);
+        bytes32 dstKey = _trackValidator(dstValidator);
+        if (!_stringsEqual(srcValidator, dstValidator)) {
+            _subtractTrackedStaked(srcKey, amountUsei);
+            trackedStakedUsei[dstKey] += amountUsei;
+        }
+        _recordWithdrawnStakingRewards(pendingRewards);
         emit Redelegated(srcValidator, dstValidator, amount);
     }
 
@@ -279,8 +307,16 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
      * @param amount Amount to undelegate (in wei, converted to uSEI for the precompile)
      */
     function undelegate(string calldata validator, uint256 amount) external onlyOperator nonReentrant {
-        bool success = STAKING.undelegate(validator, _weiToUsei(amount));
+        uint256 amountUsei = _weiToUsei(amount);
+        uint256 pendingRewards = _getValidatorPendingRewards(validator);
+
+        bool success = STAKING.undelegate(validator, amountUsei);
         if (!success) revert StakingFailed();
+
+        bytes32 validatorKey = _trackValidator(validator);
+        _subtractTrackedStaked(validatorKey, amountUsei);
+        trackedUnbondingUsei[validatorKey] += amountUsei;
+        _recordWithdrawnStakingRewards(pendingRewards);
         emit Undelegated(validator, amount);
     }
 
@@ -360,12 +396,11 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
             return;
         }
 
-        // Rewards go directly to stakingRewardAddress (set in initialize)
+        // Rewards go directly to the withdraw address set in the distribution precompile.
         bool success = DISTRIBUTION.withdrawDelegationRewards(validator);
         if (!success) revert DistributionFailed();
 
-        withdrawnStakingRewards += pendingRewards;
-        emit StakingRewardsWithdrawn(stakingRewardAddress, pendingRewards);
+        _recordWithdrawnStakingRewards(pendingRewards);
     }
 
     // ============ Admin Functions ============
@@ -393,11 +428,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     function proposeUpdateAdmin(address admin, bool remove) external onlyAdmin {
         if (admin == address(0)) revert ZeroAddress();
 
-        string memory title = remove
-            ? string(abi.encodePacked("Remove admin: ", _addressToString(admin)))
-            : string(abi.encodePacked("Add admin: ", _addressToString(admin)));
-
-        _createProposal(ProposalType.UpdateAdmin, title, admin, remove);
+        _createProposal(ProposalType.UpdateAdmin, remove ? "Remove admin" : "Add admin", admin, remove);
     }
 
     /**
@@ -407,11 +438,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     function proposeUpdateUnlockedDistributionAddress(address newAddress) external onlyAdmin {
         if (newAddress == address(0)) revert ZeroAddress();
 
-        string memory title = string(
-            abi.encodePacked("Update unlock distribution address to: ", _addressToString(newAddress))
-        );
-
-        _createProposal(ProposalType.UpdateUnlockedDistributionAddress, title, newAddress, false);
+        _createProposal(ProposalType.UpdateUnlockedDistributionAddress, "Update unlock distribution address", newAddress, false);
     }
 
     /**
@@ -421,11 +448,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     function proposeUpdateStakingRewardDistributionAddress(address newAddress) external onlyAdmin {
         if (newAddress == address(0)) revert ZeroAddress();
 
-        string memory title = string(
-            abi.encodePacked("Update staking reward address to: ", _addressToString(newAddress))
-        );
-
-        _createProposal(ProposalType.UpdateStakingRewardDistributionAddress, title, newAddress, false);
+        _createProposal(ProposalType.UpdateStakingRewardDistributionAddress, "Update staking reward address", newAddress, false);
     }
 
     /**
@@ -435,9 +458,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     function proposeEmergencyWithdraw(address dst) external onlyAdmin {
         if (dst == address(0)) revert ZeroAddress();
 
-        string memory title = string(abi.encodePacked("Emergency withdraw to: ", _addressToString(dst)));
-
-        _createProposal(ProposalType.EmergencyWithdraw, title, dst, false);
+        _createProposal(ProposalType.EmergencyWithdraw, "Emergency withdraw", dst, false);
     }
 
     /**
@@ -448,11 +469,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         if (newImplementation == address(0)) revert ZeroAddress();
         if (newImplementation.code.length == 0) revert InvalidImplementation();
 
-        string memory title = string(
-            abi.encodePacked("Upgrade contract to: ", _addressToString(newImplementation))
-        );
-
-        _createProposal(ProposalType.UpgradeContract, title, newImplementation, false);
+        _createProposal(ProposalType.UpgradeContract, "Upgrade contract", newImplementation, false);
         
         emit UpgradeProposed(newImplementation, proposalCount);
     }
@@ -466,22 +483,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         // Validate vote option (1=Yes, 2=Abstain, 3=No, 4=NoWithVeto)
         if (voteOption < 1 || voteOption > 4) revert InvalidVoteOption();
 
-        string memory voteOptionStr;
-        if (voteOption == 1) voteOptionStr = "Yes";
-        else if (voteOption == 2) voteOptionStr = "Abstain";
-        else if (voteOption == 3) voteOptionStr = "No";
-        else voteOptionStr = "NoWithVeto";
-
-        string memory title = string(
-            abi.encodePacked(
-                "Vote ",
-                voteOptionStr,
-                " on gov proposal #",
-                _uint64ToString(govProposalId)
-            )
-        );
-
-        _createProposal(ProposalType.GovVote, title, address(0), false);
+        _createProposal(ProposalType.GovVote, "Gov vote", address(0), false);
         
         // Store the gov vote data for this proposal
         govVoteData[proposalCount] = GovVoteData({
@@ -497,10 +499,13 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
      * @param proposalId The proposal ID
      */
     function voteProposal(uint256 proposalId) external onlyAdmin {
+        _requireProposalExists(proposalId);
         Proposal storage prop = proposals[proposalId];
 
+        _updateProposalStatus(proposalId);
+
+        if (prop.status == ProposalStatus.Expired) return;
         if (prop.status != ProposalStatus.Open) revert ProposalNotOpen();
-        if (block.timestamp > prop.expiresAt) revert ProposalExpired();
         if (hasVoted[proposalId][msg.sender]) revert AlreadyVoted();
 
         hasVoted[proposalId][msg.sender] = true;
@@ -516,10 +521,12 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
      * @param proposalId The proposal ID
      */
     function processProposal(uint256 proposalId) external onlyAdmin nonReentrant {
+        _requireProposalExists(proposalId);
         Proposal storage prop = proposals[proposalId];
 
         _updateProposalStatus(proposalId);
 
+        if (prop.status == ProposalStatus.Expired) return;
         if (prop.status != ProposalStatus.Passed) revert WrongExecuteStatus();
 
         prop.status = ProposalStatus.Executed;
@@ -621,22 +628,63 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
 
     /**
      * @notice Get delegations for this contract (first page only)
-     * @dev For contracts with many delegations, use delegatorDelegations directly with pagination
-     *      Internal calculations (rewards, etc.) properly handle pagination
+     * @dev Sei's staking precompile does not expose the delegation list query on every chain
+     *      version, so this returns point-lookups for validators Gringotts has used.
      */
     function getAllDelegations() external view returns (IStaking.Delegation[] memory) {
-        IStaking.DelegationsResponse memory response = STAKING.delegatorDelegations(address(this), "");
-        return response.delegations;
+        uint256 count = 0;
+        for (uint256 i = 0; i < trackedValidatorList.length; i++) {
+            if (trackedStakedUsei[_validatorKey(trackedValidatorList[i])] > 0) {
+                count++;
+            }
+        }
+
+        IStaking.Delegation[] memory delegations = new IStaking.Delegation[](count);
+        uint256 idx = 0;
+        for (uint256 i = 0; i < trackedValidatorList.length; i++) {
+            if (trackedStakedUsei[_validatorKey(trackedValidatorList[i])] > 0) {
+                delegations[idx] = STAKING.delegation(address(this), trackedValidatorList[i]);
+                idx++;
+            }
+        }
+        return delegations;
     }
 
     /**
      * @notice Get unbonding delegations (first page only)
-     * @dev For contracts with many unbonding delegations, use delegatorUnbondingDelegations directly with pagination
-     *      Internal calculations (rewards, etc.) properly handle pagination
+     * @dev Returns Gringotts' locally tracked undelegations because the live precompile
+     *      does not expose unbonding list queries on every chain version.
      */
     function getUnbondingDelegations() external view returns (IStaking.UnbondingDelegation[] memory) {
-        IStaking.UnbondingDelegationsResponse memory response = STAKING.delegatorUnbondingDelegations(address(this), "");
-        return response.unbondingDelegations;
+        uint256 count = 0;
+        for (uint256 i = 0; i < trackedValidatorList.length; i++) {
+            if (trackedUnbondingUsei[_validatorKey(trackedValidatorList[i])] > 0) {
+                count++;
+            }
+        }
+
+        IStaking.UnbondingDelegation[] memory unbondingDelegations = new IStaking.UnbondingDelegation[](count);
+        uint256 idx = 0;
+        for (uint256 i = 0; i < trackedValidatorList.length; i++) {
+            uint256 balanceUsei = trackedUnbondingUsei[_validatorKey(trackedValidatorList[i])];
+            if (balanceUsei > 0) {
+                string memory balance = _uintToString(balanceUsei);
+                IStaking.UnbondingDelegationEntry[] memory entries = new IStaking.UnbondingDelegationEntry[](1);
+                entries[0] = IStaking.UnbondingDelegationEntry({
+                    creationHeight: 0,
+                    completionTime: 0,
+                    initialBalance: balance,
+                    balance: balance
+                });
+                unbondingDelegations[idx] = IStaking.UnbondingDelegation({
+                    delegatorAddress: "",
+                    validatorAddress: trackedValidatorList[i],
+                    entries: entries
+                });
+                idx++;
+            }
+        }
+        return unbondingDelegations;
     }
 
     /**
@@ -806,6 +854,10 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         }
     }
 
+    function _requireProposalExists(uint256 proposalId) internal view {
+        if (proposalId == 0 || proposalId > proposalCount) revert ProposalNotFound();
+    }
+
     function _executeUpdateAdmin(address admin, bool remove) internal {
         if (remove) {
             _removeAdmin(admin);
@@ -851,6 +903,15 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         bool success = GOV.vote(voteData.govProposalId, voteData.voteOption);
         if (!success) revert GovVoteFailed();
         emit GovVoteExecuted(voteData.govProposalId, voteData.voteOption);
+    }
+
+    function _recordWithdrawnStakingRewards(uint256 amount) internal {
+        if (amount == 0) {
+            return;
+        }
+
+        withdrawnStakingRewards += amount;
+        emit StakingRewardsWithdrawn(stakingRewardAddress, amount);
     }
 
     function _collectVested(uint256 requestedAmount) internal returns (uint256) {
@@ -920,6 +981,9 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     function _calculateWithdrawnRewards() internal view returns (uint256) {
         uint256 bankBalance = address(this).balance;
         uint256 withdrawnPrincipal = withdrawnLocked + withdrawnUnlocked;
+        if (bankBalance + withdrawnPrincipal == totalAmount) {
+            return 0;
+        }
 
         // Calculate staked amount from all delegations (with pagination)
         uint256 staked = _getTotalStaked();
@@ -939,46 +1003,24 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     }
 
     /**
-     * @notice Get total staked amount across all validators, handling pagination
+     * @notice Get total staked amount across all validators Gringotts has used
      * @return total Total staked amount in wei
      */
     function _getTotalStaked() internal view returns (uint256 total) {
-        bytes memory nextKey = "";
-        
-        do {
-            IStaking.DelegationsResponse memory response = STAKING.delegatorDelegations(address(this), nextKey);
-            
-            for (uint256 i = 0; i < response.delegations.length; i++) {
-                if (_stringsEqual(response.delegations[i].balance.denom, SEI_DENOM)) {
-                    total += _useiToWei(response.delegations[i].balance.amount);
-                }
-            }
-            
-            nextKey = response.nextKey;
-        } while (nextKey.length > 0);
-        
+        for (uint256 i = 0; i < trackedValidatorList.length; i++) {
+            total += _useiToWei(trackedStakedUsei[_validatorKey(trackedValidatorList[i])]);
+        }
         return total;
     }
 
     /**
-     * @notice Get total unbonding amount across all validators, handling pagination
+     * @notice Get total unbonding amount across all validators Gringotts has used
      * @return total Total unbonding amount in wei
      */
     function _getTotalUnbonding() internal view returns (uint256 total) {
-        bytes memory nextKey = "";
-        
-        do {
-            IStaking.UnbondingDelegationsResponse memory response = STAKING.delegatorUnbondingDelegations(address(this), nextKey);
-            
-            for (uint256 i = 0; i < response.unbondingDelegations.length; i++) {
-                for (uint256 j = 0; j < response.unbondingDelegations[i].entries.length; j++) {
-                    total += _useiToWei(_stringToUint(response.unbondingDelegations[i].entries[j].balance));
-                }
-            }
-            
-            nextKey = response.nextKey;
-        } while (nextKey.length > 0);
-        
+        for (uint256 i = 0; i < trackedValidatorList.length; i++) {
+            total += _useiToWei(trackedUnbondingUsei[_validatorKey(trackedValidatorList[i])]);
+        }
         return total;
     }
 
@@ -1053,20 +1095,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     }
 
     function _coinAmountToWei(IDistribution.Coin memory coin) internal pure returns (uint256) {
-        if (!_stringsEqual(coin.denom, SEI_DENOM)) {
-            return 0;
-        }
-        if (coin.decimals == 18) {
-            return coin.amount;
-        }
-        if (coin.decimals < 18) {
-            return coin.amount * (10 ** (18 - coin.decimals));
-        }
-        uint256 decimalsToRemove = coin.decimals - 18;
-        if (decimalsToRemove > 77) {
-            return 0;
-        }
-        return coin.amount / (10 ** decimalsToRemove);
+        return coin.amount / DECIMAL_USEI_PER_WEI;
     }
 
     function _truncateToUseiWei(uint256 amountWei) internal pure returns (uint256) {
@@ -1165,24 +1194,29 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         return keccak256(bytes(a)) == keccak256(bytes(b));
     }
 
-    function _addressToString(address addr) internal pure returns (string memory) {
-        bytes memory alphabet = "0123456789abcdef";
-        bytes memory data = abi.encodePacked(addr);
-        bytes memory str = new bytes(2 + data.length * 2);
-        str[0] = "0";
-        str[1] = "x";
-        for (uint256 i = 0; i < data.length; i++) {
-            str[2 + i * 2] = alphabet[uint8(data[i] >> 4)];
-            str[3 + i * 2] = alphabet[uint8(data[i] & 0x0f)];
+    function _trackValidator(string memory validator) internal returns (bytes32 key) {
+        key = _validatorKey(validator);
+        if (trackedValidatorIndexPlusOne[key] == 0) {
+            trackedValidatorList.push(validator);
+            trackedValidatorIndexPlusOne[key] = trackedValidatorList.length;
         }
-        return string(str);
+        return key;
     }
 
-    function _uint64ToString(uint64 value) internal pure returns (string memory) {
+    function _subtractTrackedStaked(bytes32 validatorKey, uint256 amountUsei) internal {
+        uint256 stakedUsei = trackedStakedUsei[validatorKey];
+        trackedStakedUsei[validatorKey] = amountUsei < stakedUsei ? stakedUsei - amountUsei : 0;
+    }
+
+    function _validatorKey(string memory validator) internal pure returns (bytes32) {
+        return keccak256(bytes(validator));
+    }
+
+    function _uintToString(uint256 value) internal pure returns (string memory) {
         if (value == 0) {
             return "0";
         }
-        uint64 temp = value;
+        uint256 temp = value;
         uint256 digits;
         while (temp != 0) {
             digits++;
@@ -1191,7 +1225,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         bytes memory buffer = new bytes(digits);
         while (value != 0) {
             digits -= 1;
-            buffer[digits] = bytes1(uint8(48 + uint64(value % 10)));
+            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
             value /= 10;
         }
         return string(buffer);

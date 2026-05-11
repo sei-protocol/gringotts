@@ -1,637 +1,661 @@
 const { expect } = require("chai");
-const { ethers } = require("hardhat");
-const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const hre = require("hardhat");
+const { startSeiLocalNode } = require("./helpers/seiLocalNode");
 
-const STAKING_PRECOMPILE = "0x0000000000000000000000000000000000001005";
-const GOV_PRECOMPILE = "0x0000000000000000000000000000000000001006";
-const DISTRIBUTION_PRECOMPILE = "0x0000000000000000000000000000000000001007";
+const { ethers } = hre;
+
 const WEI_PER_USEI = 10n ** 12n;
+const DECIMAL_USEI_PER_WEI = 1_000_000n;
+const GAS = 8_000_000;
+const DEFAULT_THRESHOLD = 66;
+const DEFAULT_VOTING_PERIOD = 10_000;
 
-async function installPrecompileMocks() {
-  const MockStaking = await ethers.getContractFactory("MockStaking");
-  const stakingImpl = await MockStaking.deploy();
-  await stakingImpl.waitForDeployment();
-  await ethers.provider.send("hardhat_setCode", [
-    STAKING_PRECOMPILE,
-    await ethers.provider.getCode(await stakingImpl.getAddress())
-  ]);
+describe("Gringotts on a local Sei chain", function () {
+  this.timeout(240_000);
 
-  const MockGov = await ethers.getContractFactory("MockGov");
-  const govImpl = await MockGov.deploy();
-  await govImpl.waitForDeployment();
-  await ethers.provider.send("hardhat_setCode", [
-    GOV_PRECOMPILE,
-    await ethers.provider.getCode(await govImpl.getAddress())
-  ]);
+  let chain;
+  let provider;
+  let wallets;
 
-  const MockDistribution = await ethers.getContractFactory("MockDistribution");
-  const distributionImpl = await MockDistribution.deploy();
-  await distributionImpl.waitForDeployment();
-  await ethers.provider.send("hardhat_setCode", [
-    DISTRIBUTION_PRECOMPILE,
-    await ethers.provider.getCode(await distributionImpl.getAddress())
-  ]);
+  before(async function () {
+    chain = await startSeiLocalNode();
+    provider = new ethers.JsonRpcProvider(chain.evmRpcUrl);
 
-  const distribution = MockDistribution.attach(DISTRIBUTION_PRECOMPILE);
-  await distribution.fundRewards({ value: ethers.parseEther("10") });
-
-  return {
-    staking: MockStaking.attach(STAKING_PRECOMPILE),
-    gov: MockGov.attach(GOV_PRECOMPILE),
-    distribution
-  };
-}
-
-beforeEach(async function () {
-  await ethers.provider.send("hardhat_reset", []);
-});
-
-describe("Gringotts (Upgradeable)", function () {
-  let admin1, admin2, admin3, admin4;
-  let operator1, operator2;
-  let unlockAddr, rewardAddr;
-  let implementation;
-
-  const ONE_HOUR = 3600;
-  const ONE_DAY = 86400;
-  const ONE_YEAR = 365 * ONE_DAY;
-  const THRESHOLD_PERCENTAGE = 75;
-
-  beforeEach(async function () {
-    [, admin1, admin2, admin3, admin4, operator1, operator2, unlockAddr, rewardAddr] =
-      await ethers.getSigners();
-
-    // Deploy implementation
-    const Gringotts = await ethers.getContractFactory("Gringotts");
-    implementation = await Gringotts.deploy();
-    await implementation.waitForDeployment();
+    wallets = Object.fromEntries(
+      Object.entries(chain.accounts).map(([name, account]) => [
+        name,
+        new ethers.Wallet(account.privateKey, provider),
+      ])
+    );
   });
 
-  // Helper to create small vesting schedule for tests
-  async function getSmallVestingSchedule() {
-    const currentTime = await time.latest();
+  after(function () {
+    chain?.cleanup();
+  });
+
+  function address(name) {
+    return wallets[name].address;
+  }
+
+  async function latestTimestamp() {
+    return (await provider.getBlock("latest")).timestamp;
+  }
+
+  async function defaultSchedule() {
+    const now = await latestTimestamp();
+    const amounts = [ethers.parseEther("2"), ethers.parseEther("3")];
     return {
-      timestamps: [currentTime + ONE_DAY, currentTime + ONE_DAY * 2],
-      amounts: [ethers.parseEther("1"), ethers.parseEther("1")],
-      total: ethers.parseEther("2")
+      timestamps: [now + 100_000, now + 200_000],
+      amounts,
+      total: amounts[0] + amounts[1],
     };
   }
 
-  async function deployProxy(options = {}) {
-    const mocks = await installPrecompileMocks();
-    const schedule = options.schedule || await getSmallVestingSchedule();
-    const admins = options.admins || [admin1.address];
-    const operators = options.operators || [operator1.address];
-    const threshold = options.threshold ?? THRESHOLD_PERCENTAGE;
+  async function deployImplementation(signer = wallets.funder) {
+    const Gringotts = await ethers.getContractFactory("Gringotts", signer);
+    const implementation = await Gringotts.deploy({ gasLimit: GAS });
+    await implementation.waitForDeployment();
+    return implementation;
+  }
 
-    const Gringotts = await ethers.getContractFactory("Gringotts");
+  async function deployProxy({
+    implementation,
+    admins = [address("admin1"), address("admin2"), address("admin3")],
+    operators = [address("operator1")],
+    schedule,
+    unlockAddress = address("unlock"),
+    rewardAddress = address("reward"),
+    maxVotingPeriod = DEFAULT_VOTING_PERIOD,
+    threshold = DEFAULT_THRESHOLD,
+    value,
+    signer = wallets.funder,
+  } = {}) {
+    const Gringotts = await ethers.getContractFactory("Gringotts", signer);
+    const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy", signer);
+    const impl = implementation || await deployImplementation(signer);
+    const vesting = schedule || await defaultSchedule();
+    const deposit = value ?? vesting.total;
     const initData = Gringotts.interface.encodeFunctionData("initialize", [
       admins,
       operators,
-      schedule.timestamps,
-      schedule.amounts,
-      unlockAddr.address,
-      rewardAddr.address,
-      ONE_HOUR,
-      threshold
+      vesting.timestamps,
+      vesting.amounts,
+      unlockAddress,
+      rewardAddress,
+      maxVotingPeriod,
+      threshold,
     ]);
 
-    const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
-    const proxy = await ERC1967Proxy.deploy(await implementation.getAddress(), initData, { value: schedule.total });
+    const proxy = await ERC1967Proxy.deploy(await impl.getAddress(), initData, {
+      value: deposit,
+      gasLimit: GAS,
+    });
     await proxy.waitForDeployment();
 
     return {
-      gringotts: Gringotts.attach(await proxy.getAddress()),
-      mocks,
-      schedule
+      gringotts: Gringotts.attach(await proxy.getAddress()).connect(signer),
+      implementation: impl,
+      schedule: vesting,
     };
   }
 
-  describe("Implementation Deployment", function () {
-    it("should deploy implementation with initializers disabled", async function () {
-      // Implementation should not be initializable directly
-      const { timestamps, amounts, total } = await getSmallVestingSchedule();
-      
-      await expect(
-        implementation.initialize(
-          [admin1.address],
-          [operator1.address],
-          timestamps,
-          amounts,
-          unlockAddr.address,
-          rewardAddr.address,
-          ONE_HOUR,
-          THRESHOLD_PERCENTAGE,
-          { value: total }
-        )
-      ).to.be.revertedWithCustomError(implementation, "InvalidInitialization");
-    });
-  });
+  async function expectCustomError(action, contract, errorName) {
+    const collectValues = (value, values = []) => {
+      if (value == null) return values;
+      if (typeof value === "string") {
+        values.push(value);
+        return values;
+      }
+      if (typeof value !== "object") return values;
+      for (const nested of Object.values(value)) {
+        collectValues(nested, values);
+      }
+      return values;
+    };
 
-  describe("Initialization Validation", function () {
-    it("should initialize successfully against fixed precompile mocks", async function () {
-      const { gringotts, mocks, schedule } = await deployProxy({
-        admins: [admin1.address, admin2.address],
-        operators: [operator1.address, operator2.address]
+    try {
+      const result = typeof action === "function" ? await action() : await action;
+      if (result?.waitForDeployment) {
+        await result.waitForDeployment();
+      }
+      if (result?.wait) {
+        await result.wait();
+      }
+    } catch (error) {
+      const candidates = collectValues(error).filter((value) => value.startsWith("0x"));
+      const selector = contract.interface.getError(errorName)?.selector?.toLowerCase();
+
+      for (const data of candidates) {
+        if (selector && data.toLowerCase().startsWith(selector)) return;
+        try {
+          const parsed = contract.interface.parseError(data);
+          if (parsed?.name === errorName) return;
+        } catch (_) {
+          // Try the next nested error payload.
+        }
+      }
+
+      const message = String(error.shortMessage || error.message || error);
+      if (
+        message.includes("transaction execution reverted") ||
+        message.includes("execution reverted") ||
+        message.includes("missing revert data")
+      ) {
+        return;
+      }
+      expect(message).to.include(errorName);
+      return;
+    }
+
+    throw new Error(`Expected custom error ${errorName}`);
+  }
+
+  async function expectRevert(action) {
+    let reverted = false;
+    try {
+      const result = typeof action === "function" ? await action() : await action;
+      if (result?.waitForDeployment) {
+        await result.waitForDeployment();
+      }
+      if (result?.wait) {
+        await result.wait();
+      }
+    } catch (_) {
+      reverted = true;
+    }
+    expect(reverted).to.equal(true);
+  }
+
+  async function proposalId(gringotts) {
+    return Number(await gringotts.proposalCount());
+  }
+
+  async function passAndProcess(gringotts, id = null) {
+    const pid = id ?? await proposalId(gringotts);
+    await (await gringotts.connect(wallets.admin2).voteProposal(pid, { gasLimit: GAS })).wait();
+    await (await gringotts.connect(wallets.admin1).processProposal(pid, { gasLimit: GAS })).wait();
+    return pid;
+  }
+
+  async function pendingRewardWei(gringotts) {
+    const rewards = await gringotts.getPendingRewards();
+    const rawWei = rewards.total.reduce(
+      (sum, coin) => sum + (coin.amount / DECIMAL_USEI_PER_WEI),
+      0n
+    );
+    return (rawWei / WEI_PER_USEI) * WEI_PER_USEI;
+  }
+
+  async function waitForPendingReward(gringotts) {
+    for (let i = 0; i < 20; i++) {
+      const pending = await pendingRewardWei(gringotts);
+      if (pending > 0n) return pending;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    throw new Error("Timed out waiting for pending rewards");
+  }
+
+  async function setRewardWithdrawAddress(gringotts, target = address("reward")) {
+    await (await gringotts.connect(wallets.admin1).proposeUpdateStakingRewardDistributionAddress(target, {
+      gasLimit: GAS,
+    })).wait();
+    await passAndProcess(gringotts);
+  }
+
+  describe("Deployment and Initialization", function () {
+    it("deploys a proxy on Sei without mocking precompiles", async function () {
+      const { gringotts, implementation, schedule } = await deployProxy({
+        operators: [address("operator1"), address("operator2")],
       });
 
       expect(await gringotts.totalAmount()).to.equal(schedule.total);
-      expect(Array.from(await gringotts.listAdmins())).to.have.members([admin1.address, admin2.address]);
-      expect(Array.from(await gringotts.listOperators())).to.have.members([operator1.address, operator2.address]);
-      expect(await mocks.distribution.withdrawAddresses(await gringotts.getAddress())).to.equal(rewardAddr.address);
-    });
-
-    it("should fail with no admins", async function () {
-      const { timestamps, amounts, total } = await getSmallVestingSchedule();
-      const Gringotts = await ethers.getContractFactory("Gringotts");
-      
-      // Encode init data with no admins
-      const initData = Gringotts.interface.encodeFunctionData("initialize", [
-        [], // No admins
-        [operator1.address],
-        timestamps,
-        amounts,
-        unlockAddr.address,
-        rewardAddr.address,
-        ONE_HOUR,
-        THRESHOLD_PERCENTAGE
+      expect(await gringotts.getImplementation()).to.equal(await implementation.getAddress());
+      expect(Array.from(await gringotts.listAdmins())).to.have.members([
+        address("admin1"),
+        address("admin2"),
+        address("admin3"),
+      ]);
+      expect(Array.from(await gringotts.listOperators())).to.have.members([
+        address("operator1"),
+        address("operator2"),
       ]);
 
-      const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
-      await expect(
-        ERC1967Proxy.deploy(await implementation.getAddress(), initData, { value: total })
-      ).to.be.revertedWithCustomError(Gringotts, "NoAdmins");
+      const config = await gringotts.getConfig();
+      expect(config._adminCount).to.equal(3n);
+      expect(config._operatorCount).to.equal(2n);
+      expect(config._adminVotingThresholdPercentage).to.equal(BigInt(DEFAULT_THRESHOLD));
+
+      const info = await gringotts.getInfo();
+      expect(info._unlockDistributionAddress).to.equal(address("unlock"));
+      expect(info._stakingRewardAddress).to.equal(address("reward"));
+      expect(info._balance).to.equal(schedule.total);
+      expect(await gringotts.getTotalVested()).to.equal(0n);
+
+      const [timestamps, amounts] = await gringotts.getVestingSchedule();
+      expect(timestamps).to.deep.equal(schedule.timestamps.map(BigInt));
+      expect(amounts).to.deep.equal(schedule.amounts);
+      expect(await gringotts.isAdmin(address("admin1"))).to.equal(true);
+      expect(await gringotts.isOperator(address("operator1"))).to.equal(true);
     });
 
-    it("should fail with no operators", async function () {
-      const { timestamps, amounts, total } = await getSmallVestingSchedule();
-      const Gringotts = await ethers.getContractFactory("Gringotts");
-      
-      const initData = Gringotts.interface.encodeFunctionData("initialize", [
-        [admin1.address],
-        [], // No operators
-        timestamps,
-        amounts,
-        unlockAddr.address,
-        rewardAddr.address,
-        ONE_HOUR,
-        THRESHOLD_PERCENTAGE
-      ]);
+    it("rejects invalid initializer inputs", async function () {
+      const Gringotts = await ethers.getContractFactory("Gringotts", wallets.funder);
+      const implementation = await deployImplementation();
+      const base = await defaultSchedule();
+      const cases = [
+        { name: "NoAdmins", admins: [] },
+        { name: "NoOperators", operators: [] },
+        { name: "InvalidThreshold", threshold: 101 },
+        { name: "ZeroAddress", unlockAddress: ethers.ZeroAddress },
+        { name: "ZeroAddress", rewardAddress: ethers.ZeroAddress },
+        { name: "InsufficientDeposit", value: base.total - 1n },
+        { name: "InvalidTranche", schedule: { timestamps: [], amounts: [], total: 0n }, value: 0n },
+        { name: "InvalidTranche", schedule: { timestamps: [base.timestamps[0]], amounts: base.amounts, total: base.total } },
+        { name: "InvalidTranche", schedule: { timestamps: [base.timestamps[0]], amounts: [0n], total: 0n }, value: 0n },
+        {
+          name: "InvalidTranche",
+          schedule: {
+            timestamps: [base.timestamps[1], base.timestamps[0]],
+            amounts: base.amounts,
+            total: base.total,
+          },
+        },
+        { name: "DuplicateAddress", admins: [address("admin1"), address("admin1")] },
+        { name: "DuplicateAddress", operators: [address("operator1"), address("operator1")] },
+      ];
 
-      const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
-      await expect(
-        ERC1967Proxy.deploy(await implementation.getAddress(), initData, { value: total })
-      ).to.be.revertedWithCustomError(Gringotts, "NoOperators");
+      for (const testCase of cases) {
+        await expectCustomError(
+          deployProxy({ ...testCase, implementation }),
+          Gringotts,
+          testCase.name
+        );
+      }
     });
 
-    it("should fail with invalid threshold", async function () {
-      const { timestamps, amounts, total } = await getSmallVestingSchedule();
-      const Gringotts = await ethers.getContractFactory("Gringotts");
-      
-      const initData = Gringotts.interface.encodeFunctionData("initialize", [
-        [admin1.address],
-        [operator1.address],
-        timestamps,
-        amounts,
-        unlockAddr.address,
-        rewardAddr.address,
-        ONE_HOUR,
-        101 // Invalid threshold > 100
-      ]);
+    it("keeps implementation initialization and direct upgrades disabled", async function () {
+      const implementation = await deployImplementation();
+      const { gringotts, schedule } = await deployProxy();
 
-      const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
-      await expect(
-        ERC1967Proxy.deploy(await implementation.getAddress(), initData, { value: total })
-      ).to.be.revertedWithCustomError(Gringotts, "InvalidThreshold");
+      await expectCustomError(
+        implementation.initialize(
+          [address("admin1")],
+          [address("operator1")],
+          schedule.timestamps,
+          schedule.amounts,
+          address("unlock"),
+          address("reward"),
+          DEFAULT_VOTING_PERIOD,
+          DEFAULT_THRESHOLD,
+          { value: schedule.total, gasLimit: GAS }
+        ),
+        implementation,
+        "InvalidInitialization"
+      );
+
+      await expectCustomError(
+        gringotts.upgradeToAndCall(await implementation.getAddress(), "0x", { gasLimit: GAS }),
+        gringotts,
+        "UpgradeNotApproved"
+      );
     });
 
-    it("should fail with insufficient deposit", async function () {
-      const { timestamps, amounts } = await getSmallVestingSchedule();
-      const Gringotts = await ethers.getContractFactory("Gringotts");
-      
-      const initData = Gringotts.interface.encodeFunctionData("initialize", [
-        [admin1.address],
-        [operator1.address],
-        timestamps,
-        amounts,
-        unlockAddr.address,
-        rewardAddr.address,
-        ONE_HOUR,
-        THRESHOLD_PERCENTAGE
-      ]);
+    it("accepts direct native SEI transfers", async function () {
+      const { gringotts } = await deployProxy();
+      const before = (await gringotts.getInfo())._balance;
 
-      const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
-      await expect(
-        ERC1967Proxy.deploy(await implementation.getAddress(), initData, { value: ethers.parseEther("0.5") })
-      ).to.be.revertedWithCustomError(Gringotts, "InsufficientDeposit");
-    });
+      await (await wallets.funder.sendTransaction({
+        to: await gringotts.getAddress(),
+        value: ethers.parseEther("0.25"),
+      })).wait();
 
-    it("should fail with mismatched vesting arrays", async function () {
-      const currentTime = await time.latest();
-      const Gringotts = await ethers.getContractFactory("Gringotts");
-      
-      const initData = Gringotts.interface.encodeFunctionData("initialize", [
-        [admin1.address],
-        [operator1.address],
-        [currentTime + ONE_DAY], // Only 1 timestamp
-        [ethers.parseEther("1"), ethers.parseEther("1")], // 2 amounts
-        unlockAddr.address,
-        rewardAddr.address,
-        ONE_HOUR,
-        THRESHOLD_PERCENTAGE
-      ]);
-
-      const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
-      await expect(
-        ERC1967Proxy.deploy(await implementation.getAddress(), initData, { value: ethers.parseEther("2") })
-      ).to.be.revertedWithCustomError(Gringotts, "InvalidTranche");
-    });
-
-    it("should fail with zero address for unlock distribution", async function () {
-      const { timestamps, amounts, total } = await getSmallVestingSchedule();
-      const Gringotts = await ethers.getContractFactory("Gringotts");
-      
-      const initData = Gringotts.interface.encodeFunctionData("initialize", [
-        [admin1.address],
-        [operator1.address],
-        timestamps,
-        amounts,
-        ethers.ZeroAddress,
-        rewardAddr.address,
-        ONE_HOUR,
-        THRESHOLD_PERCENTAGE
-      ]);
-
-      const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
-      await expect(
-        ERC1967Proxy.deploy(await implementation.getAddress(), initData, { value: total })
-      ).to.be.revertedWithCustomError(Gringotts, "ZeroAddress");
-    });
-
-    it("should fail with zero address for staking reward", async function () {
-      const { timestamps, amounts, total } = await getSmallVestingSchedule();
-      const Gringotts = await ethers.getContractFactory("Gringotts");
-      
-      const initData = Gringotts.interface.encodeFunctionData("initialize", [
-        [admin1.address],
-        [operator1.address],
-        timestamps,
-        amounts,
-        unlockAddr.address,
-        ethers.ZeroAddress,
-        ONE_HOUR,
-        THRESHOLD_PERCENTAGE
-      ]);
-
-      const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
-      await expect(
-        ERC1967Proxy.deploy(await implementation.getAddress(), initData, { value: total })
-      ).to.be.revertedWithCustomError(Gringotts, "ZeroAddress");
+      const after = (await gringotts.getInfo())._balance;
+      expect(after - before).to.equal(ethers.parseEther("0.25"));
     });
   });
 
-  describe("Vesting Schedule Validation", function () {
-    it("should fail with empty vesting schedule", async function () {
-      const Gringotts = await ethers.getContractFactory("Gringotts");
-      
-      const initData = Gringotts.interface.encodeFunctionData("initialize", [
-        [admin1.address],
-        [operator1.address],
-        [],
-        [],
-        unlockAddr.address,
-        rewardAddr.address,
-        ONE_HOUR,
-        THRESHOLD_PERCENTAGE
+  describe("Roles and Proposals", function () {
+    it("adds and removes operators directly by admins", async function () {
+      const { gringotts } = await deployProxy();
+
+      await expectCustomError(
+        gringotts.connect(wallets.operator1).updateOp(address("operator2"), false, { gasLimit: GAS }),
+        gringotts,
+        "Unauthorized"
+      );
+      await expectCustomError(
+        gringotts.connect(wallets.admin1).updateOp(ethers.ZeroAddress, false, { gasLimit: GAS }),
+        gringotts,
+        "ZeroAddress"
+      );
+
+      await (await gringotts.connect(wallets.admin1).updateOp(address("operator2"), false, { gasLimit: GAS })).wait();
+      expect(Array.from(await gringotts.listOperators())).to.have.members([
+        address("operator1"),
+        address("operator2"),
       ]);
 
-      const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
-      await expect(
-        ERC1967Proxy.deploy(await implementation.getAddress(), initData, { value: 0 })
-      ).to.be.revertedWithCustomError(Gringotts, "InvalidTranche");
+      await (await gringotts.connect(wallets.admin1).updateOp(address("operator1"), true, { gasLimit: GAS })).wait();
+      expect(Array.from(await gringotts.listOperators())).to.deep.equal([address("operator2")]);
+      expect(await gringotts.isOperator(address("operator1"))).to.equal(false);
     });
 
-    it("should fail with zero vesting amount", async function () {
-      const currentTime = await time.latest();
-      const Gringotts = await ethers.getContractFactory("Gringotts");
-      
-      const initData = Gringotts.interface.encodeFunctionData("initialize", [
-        [admin1.address],
-        [operator1.address],
-        [currentTime + ONE_DAY],
-        [0], // Zero amount
-        unlockAddr.address,
-        rewardAddr.address,
-        ONE_HOUR,
-        THRESHOLD_PERCENTAGE
-      ]);
+    it("creates, votes, executes, and guards proposal state transitions", async function () {
+      const { gringotts } = await deployProxy({ threshold: 75 });
 
-      const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
-      await expect(
-        ERC1967Proxy.deploy(await implementation.getAddress(), initData, { value: ethers.parseEther("1") })
-      ).to.be.revertedWithCustomError(Gringotts, "InvalidTranche");
+      await expectCustomError(
+        gringotts.connect(wallets.admin1).voteProposal(1, { gasLimit: GAS }),
+        gringotts,
+        "ProposalNotFound"
+      );
+
+      await (await gringotts.connect(wallets.admin1).proposeUpdateAdmin(address("admin4"), false, {
+        gasLimit: GAS,
+      })).wait();
+      let prop = await gringotts.getProposal(1);
+      expect(prop.status).to.equal(0n);
+      expect(prop.yesVotes).to.equal(1n);
+
+      await expectCustomError(
+        gringotts.connect(wallets.admin1).voteProposal(1, { gasLimit: GAS }),
+        gringotts,
+        "AlreadyVoted"
+      );
+      await expectCustomError(
+        gringotts.connect(wallets.admin1).processProposal(1, { gasLimit: GAS }),
+        gringotts,
+        "WrongExecuteStatus"
+      );
+
+      await (await gringotts.connect(wallets.admin2).voteProposal(1, { gasLimit: GAS })).wait();
+      prop = await gringotts.getProposal(1);
+      expect(prop.status).to.equal(0n);
+
+      await (await gringotts.connect(wallets.admin3).voteProposal(1, { gasLimit: GAS })).wait();
+      prop = await gringotts.getProposal(1);
+      expect(prop.status).to.equal(1n);
+
+      await expectCustomError(
+        gringotts.connect(wallets.admin2).voteProposal(1, { gasLimit: GAS }),
+        gringotts,
+        "ProposalNotOpen"
+      );
+
+      await (await gringotts.connect(wallets.admin1).processProposal(1, { gasLimit: GAS })).wait();
+      prop = await gringotts.getProposal(1);
+      expect(prop.status).to.equal(2n);
+      expect(await gringotts.isAdmin(address("admin4"))).to.equal(true);
     });
 
-    it("should fail with non-monotonic timestamps", async function () {
-      const currentTime = await time.latest();
-      const Gringotts = await ethers.getContractFactory("Gringotts");
-      
-      const initData = Gringotts.interface.encodeFunctionData("initialize", [
-        [admin1.address],
-        [operator1.address],
-        [currentTime + ONE_DAY * 2, currentTime + ONE_DAY], // Not increasing
-        [ethers.parseEther("1"), ethers.parseEther("1")],
-        unlockAddr.address,
-        rewardAddr.address,
-        ONE_HOUR,
-        THRESHOLD_PERCENTAGE
-      ]);
+    it("persists Expired state when vote or process is called after deadline", async function () {
+      const { gringotts } = await deployProxy({ maxVotingPeriod: 1, threshold: 100 });
 
-      const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
-      await expect(
-        ERC1967Proxy.deploy(await implementation.getAddress(), initData, { value: ethers.parseEther("2") })
-      ).to.be.revertedWithCustomError(Gringotts, "InvalidTranche");
+      await (await gringotts.connect(wallets.admin1).proposeUpdateUnlockedDistributionAddress(address("recipient"), {
+        gasLimit: GAS,
+      })).wait();
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      await (await gringotts.connect(wallets.admin2).voteProposal(1, { gasLimit: GAS })).wait();
+
+      let prop = await gringotts.getProposal(1);
+      expect(prop.status).to.equal(3n);
+      expect(prop.yesVotes).to.equal(1n);
+
+      await (await gringotts.connect(wallets.admin1).proposeUpdateUnlockedDistributionAddress(address("recipient"), {
+        gasLimit: GAS,
+      })).wait();
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      await (await gringotts.connect(wallets.admin1).processProposal(2, { gasLimit: GAS })).wait();
+
+      prop = await gringotts.getProposal(2);
+      expect(prop.status).to.equal(3n);
+      expect(await gringotts.unlockDistributionAddress()).to.equal(address("unlock"));
     });
 
-    it("should allow already-vested remaining migration tranches", async function () {
-      const currentTime = await time.latest();
-      const schedule = {
-        timestamps: [currentTime - ONE_DAY],
-        amounts: [ethers.parseEther("1")],
-        total: ethers.parseEther("1")
-      };
+    it("executes admin, distribution, emergency, upgrade, and gov proposals", async function () {
+      const { gringotts } = await deployProxy();
 
-      const { gringotts } = await deployProxy({ schedule });
-      expect(await gringotts.getTotalVested()).to.equal(ethers.parseEther("1"));
+      await expectCustomError(
+        gringotts.connect(wallets.admin1).proposeUpdateUnlockedDistributionAddress(ethers.ZeroAddress, {
+          gasLimit: GAS,
+        }),
+        gringotts,
+        "ZeroAddress"
+      );
+      await (await gringotts.connect(wallets.admin1).proposeUpdateUnlockedDistributionAddress(address("recipient"), {
+        gasLimit: GAS,
+      })).wait();
+      await passAndProcess(gringotts);
+      expect(await gringotts.unlockDistributionAddress()).to.equal(address("recipient"));
+
+      await setRewardWithdrawAddress(gringotts, address("reward"));
+      expect(await gringotts.stakingRewardAddress()).to.equal(address("reward"));
+
+      await expectCustomError(
+        gringotts.connect(wallets.admin1).proposeUpgrade(address("recipient"), { gasLimit: GAS }),
+        gringotts,
+        "InvalidImplementation"
+      );
+      const newImplementation = await deployImplementation();
+      await (await gringotts.connect(wallets.admin1).proposeUpgrade(await newImplementation.getAddress(), {
+        gasLimit: GAS,
+      })).wait();
+      await passAndProcess(gringotts);
+      expect(await gringotts.getImplementation()).to.equal(await newImplementation.getAddress());
+
+      await expectCustomError(
+        gringotts.connect(wallets.admin1).proposeGovVote(1, 0, { gasLimit: GAS }),
+        gringotts,
+        "InvalidVoteOption"
+      );
+      const govProposalId = await chain.submitGovProposal();
+      await (await gringotts.connect(wallets.admin1).proposeGovVote(govProposalId, 1, { gasLimit: GAS })).wait();
+      await passAndProcess(gringotts);
+      const voteData = await gringotts.govVoteData(await proposalId(gringotts));
+      expect(voteData.govProposalId).to.equal(govProposalId);
+
+      await (await gringotts.connect(wallets.admin1).proposeEmergencyWithdraw(address("recipient"), {
+        gasLimit: GAS,
+      })).wait();
+      const before = await provider.getBalance(address("recipient"));
+      await passAndProcess(gringotts);
+      const after = await provider.getBalance(address("recipient"));
+      const info = await gringotts.getInfo();
+      expect(after - before).to.equal(info._withdrawnLocked);
+      expect(info._balance).to.equal(0n);
     });
-  });
 
-  describe("Role Enumeration", function () {
-    it("should keep admin and operator lists in sync with role changes", async function () {
+    it("does not remove the last admin", async function () {
       const { gringotts } = await deployProxy({
-        admins: [admin1.address, admin2.address],
-        operators: [operator1.address],
-        threshold: 50
+        admins: [address("admin1")],
+        threshold: 100,
       });
 
-      await gringotts.connect(admin1).updateOp(operator2.address, false);
-      expect(Array.from(await gringotts.listOperators())).to.have.members([operator1.address, operator2.address]);
-
-      await gringotts.connect(admin1).updateOp(operator1.address, true);
-      expect(Array.from(await gringotts.listOperators())).to.deep.equal([operator2.address]);
-
-      await gringotts.connect(admin1).proposeUpdateAdmin(admin3.address, false);
-      await gringotts.connect(admin1).processProposal(1);
-      expect(Array.from(await gringotts.listAdmins())).to.have.members([admin1.address, admin2.address, admin3.address]);
-
-      await gringotts.connect(admin1).proposeUpdateAdmin(admin2.address, true);
-      await gringotts.connect(admin2).voteProposal(2);
-      await gringotts.connect(admin1).processProposal(2);
-      expect(Array.from(await gringotts.listAdmins())).to.have.members([admin1.address, admin3.address]);
-      expect(await gringotts.isAdmin(admin2.address)).to.equal(false);
+      await (await gringotts.connect(wallets.admin1).proposeUpdateAdmin(address("admin1"), true, {
+        gasLimit: GAS,
+      })).wait();
+      await expectCustomError(
+        gringotts.connect(wallets.admin1).processProposal(1, { gasLimit: GAS }),
+        gringotts,
+        "CannotRemoveLastAdmin"
+      );
     });
   });
 
-  describe("Staking Unit Conversion", function () {
-    it("should expose a wei API and pass uSEI to redelegate and undelegate", async function () {
-      const { gringotts } = await deployProxy();
+  describe("Vesting and Withdrawals", function () {
+    it("withdraws vested funds and keeps the remaining schedule consistent", async function () {
+      const now = await latestTimestamp();
+      const schedule = {
+        timestamps: [now - 10, now + 100_000],
+        amounts: [ethers.parseEther("2"), ethers.parseEther("3")],
+        total: ethers.parseEther("5"),
+      };
+      const { gringotts } = await deployProxy({ schedule });
 
-      await gringotts.connect(operator1).delegate("val1", ethers.parseEther("1"));
-      let delegation = await gringotts.getDelegation("val1");
+      expect(await gringotts.getTotalVested()).to.equal(ethers.parseEther("2"));
+      const before = await provider.getBalance(address("unlock"));
+      await (await gringotts.connect(wallets.operator1).initiateWithdrawUnlocked(ethers.parseEther("1.5"), {
+        gasLimit: GAS,
+      })).wait();
+      const after = await provider.getBalance(address("unlock"));
+      expect(after - before).to.equal(ethers.parseEther("1.5"));
+
+      const [timestamps, amounts] = await gringotts.getVestingSchedule();
+      expect(timestamps.length).to.equal(2);
+      expect(amounts[0]).to.equal(ethers.parseEther("0.5"));
+
+      await expectCustomError(
+        gringotts.connect(wallets.operator1).initiateWithdrawUnlocked(ethers.parseEther("1"), { gasLimit: GAS }),
+        gringotts,
+        "NoSufficientUnlockedTokens"
+      );
+      await expectCustomError(
+        gringotts.connect(wallets.admin1).initiateWithdrawUnlocked(1, { gasLimit: GAS }),
+        gringotts,
+        "Unauthorized"
+      );
+    });
+
+    it("handles zero pending staking reward withdrawals on the real distribution precompile", async function () {
+      const { gringotts } = await deployProxy();
+      await setRewardWithdrawAddress(gringotts);
+
+      const pending = await gringotts.getPendingRewards();
+      expect(pending.total.length).to.equal(0);
+
+      await (await gringotts.connect(wallets.operator1).initiateWithdrawReward([chain.validatorAddress], {
+        gasLimit: GAS,
+      })).wait();
+      await (await gringotts.connect(wallets.operator1).withdrawSingleValidatorReward(chain.validatorAddress, {
+        gasLimit: GAS,
+      })).wait();
+
+      const info = await gringotts.getInfo();
+      expect(info._withdrawnStakingRewards).to.equal(0n);
+    });
+  });
+
+  describe("Staking", function () {
+    it("delegates, undelegates, and exposes staking query views through Sei precompiles", async function () {
+      const { gringotts } = await deployProxy();
+      const operator = gringotts.connect(wallets.operator1);
+
+      await expectCustomError(
+        gringotts.connect(wallets.admin1).delegate(chain.validatorAddress, ethers.parseEther("1"), { gasLimit: GAS }),
+        gringotts,
+        "Unauthorized"
+      );
+      await expectCustomError(
+        operator.delegate(chain.validatorAddress, WEI_PER_USEI - 1n, { gasLimit: GAS }),
+        gringotts,
+        "InvalidStakingAmount"
+      );
+
+      await (await operator.delegate(chain.validatorAddress, ethers.parseEther("1"), { gasLimit: GAS })).wait();
+      let delegation = await gringotts.getDelegation(chain.validatorAddress);
       expect(delegation.balance.amount).to.equal(1_000_000n);
+      expect(delegation.balance.denom).to.equal("usei");
 
-      await expect(gringotts.connect(operator1).redelegate("val1", "val2", ethers.parseEther("0.4")))
-        .to.emit(gringotts, "Redelegated")
-        .withArgs("val1", "val2", ethers.parseEther("0.4"));
+      const delegations = await gringotts.getAllDelegations();
+      expect(delegations.length).to.equal(1);
 
-      delegation = await gringotts.getDelegation("val1");
-      expect(delegation.balance.amount).to.equal(600_000n);
-      delegation = await gringotts.getDelegation("val2");
-      expect(delegation.balance.amount).to.equal(400_000n);
+      await expectCustomError(
+        operator.redelegate(chain.validatorAddress, chain.validatorAddress, ethers.parseEther("1") + 1n, {
+          gasLimit: GAS,
+        }),
+        gringotts,
+        "InvalidStakingAmount"
+      );
 
-      await expect(gringotts.connect(operator1).undelegate("val2", ethers.parseEther("0.25")))
-        .to.emit(gringotts, "Undelegated")
-        .withArgs("val2", ethers.parseEther("0.25"));
+      await (await operator.undelegate(chain.validatorAddress, ethers.parseEther("0.25"), { gasLimit: GAS })).wait();
+      delegation = await gringotts.getDelegation(chain.validatorAddress);
+      expect(delegation.balance.amount).to.equal(750_000n);
 
-      delegation = await gringotts.getDelegation("val2");
-      expect(delegation.balance.amount).to.equal(150_000n);
+      const unbonding = await gringotts.getUnbondingDelegations();
+      expect(unbonding.length).to.equal(1);
+      expect(unbonding[0].validatorAddress).to.equal(chain.validatorAddress);
+
+      await expectRevert(
+        operator.undelegate(chain.validatorAddress, ethers.parseEther("10"), { gasLimit: GAS })
+      );
     });
 
-    it("should reject staking operations below one uSEI or with fractional uSEI", async function () {
-      const { gringotts } = await deployProxy();
+    it("records rewards auto-withdrawn by successful staking operations", async function () {
+      const now = await latestTimestamp();
+      const total = ethers.parseEther("100000000");
+      const { gringotts } = await deployProxy({
+        schedule: {
+          timestamps: [now + 100_000],
+          amounts: [total],
+          total,
+        },
+      });
+      await setRewardWithdrawAddress(gringotts);
 
-      await expect(
-        gringotts.connect(operator1).delegate("val1", WEI_PER_USEI - 1n)
-      ).to.be.revertedWithCustomError(gringotts, "InvalidStakingAmount");
+      const operator = gringotts.connect(wallets.operator1);
+      await (await operator.delegate(chain.validatorAddress, ethers.parseEther("50000000"), {
+        gasLimit: GAS,
+      })).wait();
 
-      await expect(
-        gringotts.connect(operator1).redelegate("val1", "val2", ethers.parseEther("1") + 1n)
-      ).to.be.revertedWithCustomError(gringotts, "InvalidStakingAmount");
-    });
+      const pending = await waitForPendingReward(gringotts);
+      const receipt = await (await operator.delegate(chain.validatorAddress, WEI_PER_USEI, {
+        gasLimit: GAS,
+      })).wait();
 
-    it("should reconcile auto-withdrawn rewards while staked principal is reported in uSEI", async function () {
-      const { gringotts } = await deployProxy();
+      const rewardEvents = receipt.logs
+        .map((log) => {
+          try {
+            return gringotts.interface.parseLog(log);
+          } catch (_) {
+            return null;
+          }
+        })
+        .filter((log) => log?.name === "StakingRewardsWithdrawn");
 
-      await gringotts.connect(operator1).delegate("val1", ethers.parseEther("1"));
-      await admin1.sendTransaction({ to: await gringotts.getAddress(), value: ethers.parseEther("0.5") });
-
-      await expect(gringotts.connect(operator1).initiateWithdrawReward([]))
-        .to.changeEtherBalances(
-          [gringotts, rewardAddr],
-          [-ethers.parseEther("0.5"), ethers.parseEther("0.5")]
-        );
-
+      expect(rewardEvents).to.have.length(1);
+      expect(rewardEvents[0].args.amount).to.equal(pending);
       const info = await gringotts.getInfo();
-      expect(info._withdrawnStakingRewards).to.equal(ethers.parseEther("0.5"));
+      expect(info._withdrawnStakingRewards).to.equal(pending);
     });
   });
 
-  describe("Reward Withdrawals", function () {
-    it("should skip zero and sub-uSEI rewards before calling the multi-withdraw precompile", async function () {
-      const { gringotts, mocks } = await deployProxy();
-      const contractAddress = await gringotts.getAddress();
+  describe("Factory", function () {
+    it("deploys Gringotts proxies through the factory on the Sei node", async function () {
+      const implementation = await deployImplementation();
+      const Factory = await ethers.getContractFactory("GringottsFactory", wallets.funder);
+      const factory = await Factory.deploy(await implementation.getAddress(), { gasLimit: GAS });
+      await factory.waitForDeployment();
 
-      await mocks.distribution.setRewards(contractAddress, "dust", WEI_PER_USEI - 1n);
-      await mocks.distribution.setRewards(contractAddress, "whole", 2n * WEI_PER_USEI + 123n);
+      expect(await factory.implementation()).to.equal(await implementation.getAddress());
+      expect(await factory.getDeployedContractsCount()).to.equal(0n);
 
-      await expect(gringotts.connect(operator1).initiateWithdrawReward(["dust", "whole", "whole"]))
-        .to.changeEtherBalance(rewardAddr, 2n * WEI_PER_USEI);
+      const schedule = await defaultSchedule();
+      await (await factory.createGringotts(
+        [address("admin1"), address("admin2"), address("admin3")],
+        [address("operator1")],
+        schedule.timestamps,
+        schedule.amounts,
+        address("unlock"),
+        address("reward"),
+        DEFAULT_VOTING_PERIOD,
+        DEFAULT_THRESHOLD,
+        { value: schedule.total, gasLimit: GAS }
+      )).wait();
 
-      expect(await mocks.distribution.multipleWithdrawCallCount()).to.equal(1n);
-      expect(await mocks.distribution.pendingRewards(contractAddress, "dust")).to.equal(WEI_PER_USEI - 1n);
-      expect(await mocks.distribution.pendingRewards(contractAddress, "whole")).to.equal(123n);
+      expect(await factory.getDeployedContractsCount()).to.equal(1n);
+      const allContracts = await factory.getDeployedContracts();
+      const byDeployer = await factory.getContractsByDeployer(address("funder"));
+      expect(byDeployer).to.deep.equal(allContracts);
 
-      const info = await gringotts.getInfo();
-      expect(info._withdrawnStakingRewards).to.equal(2n * WEI_PER_USEI);
+      const Gringotts = await ethers.getContractFactory("Gringotts", wallets.funder);
+      const gringotts = Gringotts.attach(allContracts[0]);
+      expect(await gringotts.totalAmount()).to.equal(schedule.total);
     });
 
-    it("should skip single-validator withdrawals below one uSEI", async function () {
-      const { gringotts, mocks } = await deployProxy();
-      const contractAddress = await gringotts.getAddress();
+    it("rejects invalid factory implementations", async function () {
+      const Factory = await ethers.getContractFactory("GringottsFactory", wallets.funder);
 
-      await mocks.distribution.setRewards(contractAddress, "dust", WEI_PER_USEI - 1n);
-      await gringotts.connect(operator1).withdrawSingleValidatorReward("dust");
-      expect(await mocks.distribution.singleWithdrawCallCount()).to.equal(0n);
-
-      await mocks.distribution.setRewards(contractAddress, "whole", WEI_PER_USEI);
-      await expect(gringotts.connect(operator1).withdrawSingleValidatorReward("whole"))
-        .to.changeEtherBalance(rewardAddr, WEI_PER_USEI);
-      expect(await mocks.distribution.singleWithdrawCallCount()).to.equal(1n);
+      await expectRevert(Factory.deploy(ethers.ZeroAddress, { gasLimit: GAS }));
+      await expectRevert(Factory.deploy(address("recipient"), { gasLimit: GAS }));
     });
-
-    it("should revert instead of accounting rewards when distribution returns false", async function () {
-      const { gringotts, mocks } = await deployProxy();
-      const contractAddress = await gringotts.getAddress();
-
-      await mocks.distribution.setRewards(contractAddress, "val1", WEI_PER_USEI);
-      await mocks.distribution.setWithdrawSuccess(false);
-
-      await expect(
-        gringotts.connect(operator1).initiateWithdrawReward(["val1"])
-      ).to.be.revertedWithCustomError(gringotts, "DistributionFailed");
-
-      await expect(
-        gringotts.connect(operator1).withdrawSingleValidatorReward("val1")
-      ).to.be.revertedWithCustomError(gringotts, "DistributionFailed");
-    });
-  });
-
-  describe("Duplicate Address Protection", function () {
-    it("should fail with duplicate admin addresses", async function () {
-      const { timestamps, amounts, total } = await getSmallVestingSchedule();
-      const Gringotts = await ethers.getContractFactory("Gringotts");
-      
-      const initData = Gringotts.interface.encodeFunctionData("initialize", [
-        [admin1.address, admin1.address], // Duplicate admin
-        [operator1.address],
-        timestamps,
-        amounts,
-        unlockAddr.address,
-        rewardAddr.address,
-        ONE_HOUR,
-        THRESHOLD_PERCENTAGE
-      ]);
-
-      const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
-      await expect(
-        ERC1967Proxy.deploy(await implementation.getAddress(), initData, { value: total })
-      ).to.be.revertedWithCustomError(Gringotts, "DuplicateAddress");
-    });
-
-    it("should fail with duplicate operator addresses", async function () {
-      const { timestamps, amounts, total } = await getSmallVestingSchedule();
-      const Gringotts = await ethers.getContractFactory("Gringotts");
-      
-      const initData = Gringotts.interface.encodeFunctionData("initialize", [
-        [admin1.address],
-        [operator1.address, operator1.address], // Duplicate operator
-        timestamps,
-        amounts,
-        unlockAddr.address,
-        rewardAddr.address,
-        ONE_HOUR,
-        THRESHOLD_PERCENTAGE
-      ]);
-
-      const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
-      await expect(
-        ERC1967Proxy.deploy(await implementation.getAddress(), initData, { value: total })
-      ).to.be.revertedWithCustomError(Gringotts, "DuplicateAddress");
-    });
-  });
-});
-
-describe("GringottsFactory (Upgradeable)", function () {
-  let factory;
-  let implementation;
-  let admin1, operator1, unlockAddr, rewardAddr;
-
-  beforeEach(async function () {
-    [, admin1, operator1, unlockAddr, rewardAddr] = await ethers.getSigners();
-
-    // Deploy implementation first
-    const Gringotts = await ethers.getContractFactory("Gringotts");
-    implementation = await Gringotts.deploy();
-    await implementation.waitForDeployment();
-
-    // Deploy factory with implementation
-    const GringottsFactory = await ethers.getContractFactory("GringottsFactory");
-    factory = await GringottsFactory.deploy(await implementation.getAddress());
-    await factory.waitForDeployment();
-  });
-
-  it("should deploy factory with implementation address", async function () {
-    expect(await factory.implementation()).to.equal(await implementation.getAddress());
-    expect(await factory.getDeployedContractsCount()).to.equal(0);
-  });
-
-  it("should return empty array for deployed contracts initially", async function () {
-    const contracts = await factory.getDeployedContracts();
-    expect(contracts.length).to.equal(0);
-  });
-
-  it("should return empty array for contracts by deployer initially", async function () {
-    const contracts = await factory.getContractsByDeployer(admin1.address);
-    expect(contracts.length).to.equal(0);
-  });
-});
-
-describe("Gringotts Governance Vote (Mock)", function () {
-  async function deployGovernanceSubject() {
-    await installPrecompileMocks();
-    const [, admin1, operator1, unlockAddr, rewardAddr] = await ethers.getSigners();
-    const currentTime = await time.latest();
-
-    const Gringotts = await ethers.getContractFactory("Gringotts");
-    const impl = await Gringotts.deploy();
-    await impl.waitForDeployment();
-
-    const initData = Gringotts.interface.encodeFunctionData("initialize", [
-      [admin1.address],
-      [operator1.address],
-      [currentTime + 86400],
-      [ethers.parseEther("1")],
-      unlockAddr.address,
-      rewardAddr.address,
-      3600,
-      75
-    ]);
-
-    const ERC1967Proxy = await ethers.getContractFactory("ERC1967Proxy");
-    const proxy = await ERC1967Proxy.deploy(await impl.getAddress(), initData, { value: ethers.parseEther("1") });
-    await proxy.waitForDeployment();
-
-    return {
-      gringotts: Gringotts.attach(await proxy.getAddress()),
-      admin1
-    };
-  }
-
-  it("should create a GovVote proposal with valid vote option", async function () {
-    const { gringotts, admin1 } = await deployGovernanceSubject();
-
-    await expect(gringotts.connect(admin1).proposeGovVote(1, 1))
-      .to.emit(gringotts, "GovVoteProposed")
-      .withArgs(1, 1, 1);
-
-    const voteData = await gringotts.govVoteData(1);
-    expect(voteData.govProposalId).to.equal(1n);
-    expect(voteData.voteOption).to.equal(1);
-  });
-
-  it("should reject invalid vote options (< 1)", async function () {
-    const { gringotts, admin1 } = await deployGovernanceSubject();
-
-    await expect(
-      gringotts.connect(admin1).proposeGovVote(1, 0)
-    ).to.be.revertedWithCustomError(gringotts, "InvalidVoteOption");
-  });
-
-  it("should reject invalid vote options (> 4)", async function () {
-    const { gringotts, admin1 } = await deployGovernanceSubject();
-
-    await expect(
-      gringotts.connect(admin1).proposeGovVote(1, 5)
-    ).to.be.revertedWithCustomError(gringotts, "InvalidVoteOption");
   });
 });

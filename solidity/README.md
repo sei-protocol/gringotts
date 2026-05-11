@@ -132,6 +132,8 @@ const proxyAddress = await factory.createGringotts(
 const gringotts = Gringotts.attach(proxyAddress);
 ```
 
+After deployment, submit and process an `UpdateStakingRewardDistributionAddress` proposal for the configured reward address. The initializer records `stakingRewardAddress`, but it does not call the distribution precompile because a proxy address is not associated while its constructor is still running.
+
 ### Direct Deployment (without factory)
 
 ```javascript

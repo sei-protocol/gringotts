@@ -3,6 +3,10 @@ pragma solidity ^0.8.24;
 
 import "../../interfaces/IStaking.sol";
 
+interface IMockDistributionAutoWithdraw {
+    function autoWithdrawDelegationRewards(address delegator, string memory validator) external returns (bool);
+}
+
 /**
  * @title MockStaking
  * @notice A mock staking contract for testing purposes
@@ -10,6 +14,8 @@ import "../../interfaces/IStaking.sol";
  */
 contract MockStaking is IStaking {
     uint256 private constant WEI_PER_USEI = 1e12;
+    IMockDistributionAutoWithdraw private constant DISTRIBUTION =
+        IMockDistributionAutoWithdraw(0x0000000000000000000000000000000000001007);
 
     // delegator => validator string => delegation info
     mapping(address => mapping(string => DelegationInfo)) internal _delegations;
@@ -38,6 +44,7 @@ contract MockStaking is IStaking {
         require(msg.value > 0, "No value sent");
         require(msg.value % WEI_PER_USEI == 0, "Not whole uSEI");
         uint256 amountUsei = msg.value / WEI_PER_USEI;
+        _autoWithdrawRewards(msg.sender, valAddr);
 
         if (!_validatorExists[msg.sender][valAddr]) {
             _delegatorValidators[msg.sender].push(valAddr);
@@ -57,6 +64,10 @@ contract MockStaking is IStaking {
         uint256 amount
     ) external override returns (bool) {
         require(_delegations[msg.sender][srcValidator].amount >= amount, "Insufficient delegation");
+        _autoWithdrawRewards(msg.sender, srcValidator);
+        if (!_stringsEqual(srcValidator, dstValidator)) {
+            _autoWithdrawRewards(msg.sender, dstValidator);
+        }
 
         _delegations[msg.sender][srcValidator].amount -= amount;
         _delegations[msg.sender][srcValidator].shares -= amount;
@@ -75,6 +86,7 @@ contract MockStaking is IStaking {
 
     function undelegate(string memory valAddr, uint256 amount) external override returns (bool) {
         require(_delegations[msg.sender][valAddr].amount >= amount, "Insufficient delegation");
+        _autoWithdrawRewards(msg.sender, valAddr);
 
         _delegations[msg.sender][valAddr].amount -= amount;
         _delegations[msg.sender][valAddr].shares -= amount;
@@ -389,6 +401,15 @@ contract MockStaking is IStaking {
             value /= 10;
         }
         return string(buffer);
+    }
+
+    function _autoWithdrawRewards(address delegator, string memory validatorAddress) internal {
+        bool success = DISTRIBUTION.autoWithdrawDelegationRewards(delegator, validatorAddress);
+        require(success, "Auto withdraw failed");
+    }
+
+    function _stringsEqual(string memory a, string memory b) internal pure returns (bool) {
+        return keccak256(bytes(a)) == keccak256(bytes(b));
     }
 
     // ============ Test Helpers ============
