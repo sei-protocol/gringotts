@@ -98,7 +98,6 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     string[] private trackedValidatorList;
     mapping(bytes32 => uint256) private trackedValidatorIndexPlusOne;
     mapping(bytes32 => uint256) private trackedStakedUsei;
-    mapping(bytes32 => uint256) private trackedUnbondingUsei;
 
     // Voting configuration
     uint256 public maxVotingPeriod;
@@ -315,7 +314,6 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
 
         bytes32 validatorKey = _trackValidator(validator);
         _subtractTrackedStaked(validatorKey, amountUsei);
-        trackedUnbondingUsei[validatorKey] += amountUsei;
         _recordConfiguredStakingRewards(pendingRewards);
         emit Undelegated(validator, amount);
     }
@@ -660,39 +658,12 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
 
     /**
      * @notice Get unbonding delegations (first page only)
-     * @dev Returns Gringotts' locally tracked undelegations because the live precompile
-     *      does not expose unbonding list queries on every chain version.
+     * @dev Sei's staking precompile does not expose unbonding list queries on every
+     *      chain version. Gringotts intentionally does not track undelegations as
+     *      principal offsets because it cannot observe completion callbacks.
      */
-    function getUnbondingDelegations() external view returns (IStaking.UnbondingDelegation[] memory) {
-        uint256 count = 0;
-        for (uint256 i = 0; i < trackedValidatorList.length; i++) {
-            if (trackedUnbondingUsei[_validatorKey(trackedValidatorList[i])] > 0) {
-                count++;
-            }
-        }
-
-        IStaking.UnbondingDelegation[] memory unbondingDelegations = new IStaking.UnbondingDelegation[](count);
-        uint256 idx = 0;
-        for (uint256 i = 0; i < trackedValidatorList.length; i++) {
-            uint256 balanceUsei = trackedUnbondingUsei[_validatorKey(trackedValidatorList[i])];
-            if (balanceUsei > 0) {
-                string memory balance = _uintToString(balanceUsei);
-                IStaking.UnbondingDelegationEntry[] memory entries = new IStaking.UnbondingDelegationEntry[](1);
-                entries[0] = IStaking.UnbondingDelegationEntry({
-                    creationHeight: 0,
-                    completionTime: 0,
-                    initialBalance: balance,
-                    balance: balance
-                });
-                unbondingDelegations[idx] = IStaking.UnbondingDelegation({
-                    delegatorAddress: "",
-                    validatorAddress: trackedValidatorList[i],
-                    entries: entries
-                });
-                idx++;
-            }
-        }
-        return unbondingDelegations;
+    function getUnbondingDelegations() external pure returns (IStaking.UnbondingDelegation[] memory) {
+        return new IStaking.UnbondingDelegation[](0);
     }
 
     /**
@@ -1011,12 +982,9 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         // Calculate staked amount from all delegations (with pagination)
         uint256 staked = _getTotalStaked();
 
-        // Calculate unbonding amount from all unbonding delegations (with pagination)
-        uint256 unbonding = _getTotalUnbonding();
-
         uint256 principalInBank = 0;
-        if (withdrawnPrincipal + staked + unbonding < totalAmount) {
-            principalInBank = totalAmount - withdrawnPrincipal - staked - unbonding;
+        if (withdrawnPrincipal + staked < totalAmount) {
+            principalInBank = totalAmount - withdrawnPrincipal - staked;
         }
 
         if (principalInBank < bankBalance) {
@@ -1032,17 +1000,6 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     function _getTotalStaked() internal view returns (uint256 total) {
         for (uint256 i = 0; i < trackedValidatorList.length; i++) {
             total += _useiToWei(trackedStakedUsei[_validatorKey(trackedValidatorList[i])]);
-        }
-        return total;
-    }
-
-    /**
-     * @notice Get total unbonding amount across all validators Gringotts has used
-     * @return total Total unbonding amount in wei
-     */
-    function _getTotalUnbonding() internal view returns (uint256 total) {
-        for (uint256 i = 0; i < trackedValidatorList.length; i++) {
-            total += _useiToWei(trackedUnbondingUsei[_validatorKey(trackedValidatorList[i])]);
         }
         return total;
     }
@@ -1184,25 +1141,6 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
 
     function _validatorKey(string memory validator) internal pure returns (bytes32) {
         return keccak256(bytes(validator));
-    }
-
-    function _uintToString(uint256 value) internal pure returns (string memory) {
-        if (value == 0) {
-            return "0";
-        }
-        uint256 temp = value;
-        uint256 digits;
-        while (temp != 0) {
-            digits++;
-            temp /= 10;
-        }
-        bytes memory buffer = new bytes(digits);
-        while (value != 0) {
-            digits -= 1;
-            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
-            value /= 10;
-        }
-        return string(buffer);
     }
 
     // ============ Receive Function ============

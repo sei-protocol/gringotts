@@ -195,6 +195,15 @@ describe("Gringotts on a local Sei chain", function () {
     throw new Error("Timed out waiting for pending rewards");
   }
 
+  async function waitForContractBalanceAtLeast(gringotts, amount) {
+    for (let i = 0; i < 40; i++) {
+      const info = await gringotts.getInfo();
+      if (info._balance >= amount) return info._balance;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    throw new Error(`Timed out waiting for contract balance to reach ${amount}`);
+  }
+
   async function setRewardWithdrawAddress(gringotts, target = address("reward")) {
     await (await gringotts.connect(wallets.admin1).proposeUpdateStakingRewardDistributionAddress(target, {
       gasLimit: GAS,
@@ -602,12 +611,41 @@ describe("Gringotts on a local Sei chain", function () {
       expect(delegation.balance.amount).to.equal(750_000n);
 
       const unbonding = await gringotts.getUnbondingDelegations();
-      expect(unbonding.length).to.equal(1);
-      expect(unbonding[0].validatorAddress).to.equal(chain.validatorAddress);
+      expect(unbonding.length).to.equal(0);
 
       await expectRevert(
         operator.undelegate(chain.validatorAddress, ethers.parseEther("10"), { gasLimit: GAS })
       );
+    });
+
+    it("does not treat completed unbonding principal as rewards", async function () {
+      const now = await latestTimestamp();
+      const total = ethers.parseEther("5");
+      const stakeAmount = ethers.parseEther("1");
+      const { gringotts } = await deployProxy({
+        schedule: {
+          timestamps: [now + 100_000],
+          amounts: [total],
+          total,
+        },
+      });
+
+      const operator = gringotts.connect(wallets.operator1);
+      await (await operator.delegate(chain.validatorAddress, stakeAmount, { gasLimit: GAS })).wait();
+      await (await operator.undelegate(chain.validatorAddress, stakeAmount, { gasLimit: GAS })).wait();
+
+      const balanceBefore = await waitForContractBalanceAtLeast(gringotts, total);
+      const bankedRewards = balanceBefore > total ? balanceBefore - total : 0n;
+      const beforeRewardBalance = await provider.getBalance(address("reward"));
+
+      await (await operator.initiateWithdrawReward([], { gasLimit: GAS })).wait();
+
+      const afterRewardBalance = await provider.getBalance(address("reward"));
+      expect(afterRewardBalance - beforeRewardBalance).to.equal(bankedRewards);
+
+      const info = await gringotts.getInfo();
+      expect(info._balance).to.equal(total);
+      expect(info._withdrawnStakingRewards).to.equal(bankedRewards);
     });
 
     it("records rewards auto-withdrawn by successful staking operations", async function () {
