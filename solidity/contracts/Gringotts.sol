@@ -63,7 +63,6 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     uint256 private constant PERCENTAGE_DENOMINATOR = 100;
     uint256 private constant WEI_PER_USEI = 1e12;
     uint256 private constant DECIMAL_USEI_PER_WEI = 1e6;
-    string private constant SEI_DENOM = "usei";
 
     // Sei Precompile addresses
     IStaking public constant STAKING = IStaking(STAKING_PRECOMPILE_ADDRESS);
@@ -75,6 +74,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     // Distribution addresses
     address public unlockDistributionAddress;
     address public stakingRewardAddress;
+    bool public stakingRewardWithdrawAddressConfigured;
 
     // Vesting state
     uint256[] public vestingTimestamps;
@@ -267,7 +267,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
 
         bytes32 validatorKey = _trackValidator(validator);
         trackedStakedUsei[validatorKey] += amountUsei;
-        _recordWithdrawnStakingRewards(pendingRewards);
+        _recordConfiguredStakingRewards(pendingRewards);
         emit Delegated(validator, amount);
     }
 
@@ -297,7 +297,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
             _subtractTrackedStaked(srcKey, amountUsei);
             trackedStakedUsei[dstKey] += amountUsei;
         }
-        _recordWithdrawnStakingRewards(pendingRewards);
+        _recordConfiguredStakingRewards(pendingRewards);
         emit Redelegated(srcValidator, dstValidator, amount);
     }
 
@@ -316,7 +316,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         bytes32 validatorKey = _trackValidator(validator);
         _subtractTrackedStaked(validatorKey, amountUsei);
         trackedUnbondingUsei[validatorKey] += amountUsei;
-        _recordWithdrawnStakingRewards(pendingRewards);
+        _recordConfiguredStakingRewards(pendingRewards);
         emit Undelegated(validator, amount);
     }
 
@@ -340,13 +340,8 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
      */
     function initiateWithdrawReward(string[] calldata validators) external onlyOperator nonReentrant {
         // First, send any rewards already in contract balance (from auto-withdrawals)
-        uint256 existingRewards = _calculateWithdrawnRewards();
-        if (existingRewards > 0) {
-            (bool success, ) = stakingRewardAddress.call{value: existingRewards}("");
-            if (!success) revert TransferFailed();
-        }
-
-        uint256 totalWithdrawn = existingRewards;
+        uint256 totalWithdrawn = _calculateWithdrawnRewards();
+        _sendStakingRewards(totalWithdrawn);
 
         if (validators.length > 0) {
             IDistribution.Rewards memory rewardsInfo = DISTRIBUTION.rewards(address(this));
@@ -373,15 +368,21 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
                     validatorsToWithdraw[i] = eligibleValidators[i];
                 }
 
+                uint256 balanceBefore = address(this).balance;
                 bool success = DISTRIBUTION.withdrawMultipleDelegationRewards(validatorsToWithdraw);
                 if (!success) revert DistributionFailed();
-                totalWithdrawn += withdrawableRewards;
+                if (stakingRewardWithdrawAddressConfigured) {
+                    totalWithdrawn += withdrawableRewards;
+                } else if (address(this).balance > balanceBefore) {
+                    uint256 receivedRewards = address(this).balance - balanceBefore;
+                    _sendStakingRewards(receivedRewards);
+                    totalWithdrawn += receivedRewards;
+                }
             }
         }
 
         if (totalWithdrawn > 0) {
-            withdrawnStakingRewards += totalWithdrawn;
-            emit StakingRewardsWithdrawn(stakingRewardAddress, totalWithdrawn);
+            _recordWithdrawnStakingRewards(totalWithdrawn);
         }
     }
 
@@ -397,10 +398,17 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         }
 
         // Rewards go directly to the withdraw address set in the distribution precompile.
+        uint256 balanceBefore = address(this).balance;
         bool success = DISTRIBUTION.withdrawDelegationRewards(validator);
         if (!success) revert DistributionFailed();
 
-        _recordWithdrawnStakingRewards(pendingRewards);
+        if (stakingRewardWithdrawAddressConfigured) {
+            _recordWithdrawnStakingRewards(pendingRewards);
+        } else if (address(this).balance > balanceBefore) {
+            uint256 receivedRewards = address(this).balance - balanceBefore;
+            _sendStakingRewards(receivedRewards);
+            _recordWithdrawnStakingRewards(receivedRewards);
+        }
     }
 
     // ============ Admin Functions ============
@@ -876,6 +884,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         // Update the distribution precompile's withdraw address
         bool success = DISTRIBUTION.setWithdrawAddress(newAddress);
         if (!success) revert SetWithdrawAddressFailed();
+        stakingRewardWithdrawAddressConfigured = true;
         emit StakingRewardAddressUpdated(newAddress);
     }
 
@@ -912,6 +921,23 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
 
         withdrawnStakingRewards += amount;
         emit StakingRewardsWithdrawn(stakingRewardAddress, amount);
+    }
+
+    function _recordConfiguredStakingRewards(uint256 amount) internal {
+        if (!stakingRewardWithdrawAddressConfigured) {
+            return;
+        }
+
+        _recordWithdrawnStakingRewards(amount);
+    }
+
+    function _sendStakingRewards(uint256 amount) internal {
+        if (amount == 0) {
+            return;
+        }
+
+        (bool success, ) = stakingRewardAddress.call{value: amount}("");
+        if (!success) revert TransferFailed();
     }
 
     function _collectVested(uint256 requestedAmount) internal returns (uint256) {
@@ -981,9 +1007,6 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     function _calculateWithdrawnRewards() internal view returns (uint256) {
         uint256 bankBalance = address(this).balance;
         uint256 withdrawnPrincipal = withdrawnLocked + withdrawnUnlocked;
-        if (bankBalance + withdrawnPrincipal == totalAmount) {
-            return 0;
-        }
 
         // Calculate staked amount from all delegations (with pagination)
         uint256 staked = _getTotalStaked();
@@ -1022,55 +1045,6 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
             total += _useiToWei(trackedUnbondingUsei[_validatorKey(trackedValidatorList[i])]);
         }
         return total;
-    }
-
-    /**
-     * @notice Parse a string to uint256, handling decimal and suffixed formats
-     * @dev Parses only the integer part - stops at first non-digit character
-     *      This correctly handles:
-     *      - "1000000" → 1000000
-     *      - "1000000.000000000000000000" → 1000000 (stops at decimal)
-     *      - "1000000usei" → 1000000 (stops at denom suffix)
-     * @param s The string to parse
-     * @return result The parsed uint256 value
-     */
-    function _stringToUint(string memory s) internal pure returns (uint256 result) {
-        bytes memory b = bytes(s);
-        uint256 i = 0;
-        
-        // Skip leading whitespace
-        while (i < b.length && (b[i] == 0x20 || b[i] == 0x09 || b[i] == 0x0a || b[i] == 0x0d)) {
-            i++;
-        }
-        
-        // Parse digits until first non-digit character
-        while (i < b.length) {
-            uint8 c = uint8(b[i]);
-            if (c >= 48 && c <= 57) {
-                // Check for overflow before multiplication
-                if (result > type(uint256).max / 10) {
-                    revert InvalidTranche("numeric overflow in string parsing");
-                }
-                result = result * 10 + (c - 48);
-                i++;
-            } else {
-                // Stop at first non-digit (decimal point, letter, etc.)
-                break;
-            }
-        }
-        
-        // Empty or non-numeric strings return 0, which is valid for balance queries
-        // (e.g., no unbonding delegations means balance is effectively 0)
-        return result;
-    }
-
-    function _getTotalPendingRewards() internal view returns (uint256) {
-        IDistribution.Rewards memory rewardsInfo = DISTRIBUTION.rewards(address(this));
-        uint256 total = 0;
-        for (uint256 i = 0; i < rewardsInfo.total.length; i++) {
-            total += _coinAmountToWei(rewardsInfo.total[i]);
-        }
-        return _truncateToUseiWei(total);
     }
 
     function _getValidatorPendingRewards(string calldata validator) internal view returns (uint256) {
@@ -1244,5 +1218,5 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
      * @dev Reserved storage space for future upgrades
      * This allows adding new state variables in upgrades without shifting existing storage
      */
-    uint256[46] private __gap;
+    uint256[45] private __gap;
 }

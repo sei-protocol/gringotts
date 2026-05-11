@@ -532,6 +532,37 @@ describe("Gringotts on a local Sei chain", function () {
       const info = await gringotts.getInfo();
       expect(info._withdrawnStakingRewards).to.equal(0n);
     });
+
+    it("forwards banked rewards even when they offset staked principal", async function () {
+      const total = ethers.parseEther("5");
+      const now = await latestTimestamp();
+      const { gringotts } = await deployProxy({
+        schedule: {
+          timestamps: [now + 100_000],
+          amounts: [total],
+          total,
+        },
+      });
+      const rewardAmount = ethers.parseEther("1");
+      const operator = gringotts.connect(wallets.operator1);
+
+      await (await operator.delegate(chain.validatorAddress, rewardAmount, { gasLimit: GAS })).wait();
+      await (await wallets.funder.sendTransaction({
+        to: await gringotts.getAddress(),
+        value: rewardAmount,
+      })).wait();
+
+      const beforeInfo = await gringotts.getInfo();
+      expect(beforeInfo._balance).to.equal(total);
+
+      const beforeRewardBalance = await provider.getBalance(address("reward"));
+      await (await operator.initiateWithdrawReward([], { gasLimit: GAS })).wait();
+      const afterRewardBalance = await provider.getBalance(address("reward"));
+
+      expect(afterRewardBalance - beforeRewardBalance).to.equal(rewardAmount);
+      const afterInfo = await gringotts.getInfo();
+      expect(afterInfo._withdrawnStakingRewards).to.equal(rewardAmount);
+    });
   });
 
   describe("Staking", function () {
@@ -615,6 +646,52 @@ describe("Gringotts on a local Sei chain", function () {
       expect(rewardEvents[0].args.amount).to.equal(pending);
       const info = await gringotts.getInfo();
       expect(info._withdrawnStakingRewards).to.equal(pending);
+    });
+
+    it("does not double count rewards auto-withdrawn before withdraw address is configured", async function () {
+      const now = await latestTimestamp();
+      const total = ethers.parseEther("100000000");
+      const stakeAmount = ethers.parseEther("50000000");
+      const secondStakeAmount = WEI_PER_USEI;
+      const { gringotts } = await deployProxy({
+        schedule: {
+          timestamps: [now + 100_000],
+          amounts: [total],
+          total,
+        },
+      });
+
+      const operator = gringotts.connect(wallets.operator1);
+      await (await operator.delegate(chain.validatorAddress, stakeAmount, { gasLimit: GAS })).wait();
+      await waitForPendingReward(gringotts);
+      const receipt = await (await operator.delegate(chain.validatorAddress, secondStakeAmount, {
+        gasLimit: GAS,
+      })).wait();
+
+      const rewardEvents = receipt.logs
+        .map((log) => {
+          try {
+            return gringotts.interface.parseLog(log);
+          } catch (_) {
+            return null;
+          }
+        })
+        .filter((log) => log?.name === "StakingRewardsWithdrawn");
+      expect(rewardEvents).to.have.length(0);
+
+      const infoAfterAutoWithdraw = await gringotts.getInfo();
+      expect(infoAfterAutoWithdraw._withdrawnStakingRewards).to.equal(0n);
+      const bankedRewards = infoAfterAutoWithdraw._balance - (total - stakeAmount - secondStakeAmount);
+      expect(bankedRewards).to.be.greaterThan(0n);
+
+      await setRewardWithdrawAddress(gringotts);
+      const beforeRewardBalance = await provider.getBalance(address("reward"));
+      await (await operator.initiateWithdrawReward([], { gasLimit: GAS })).wait();
+      const afterRewardBalance = await provider.getBalance(address("reward"));
+
+      expect(afterRewardBalance - beforeRewardBalance).to.equal(bankedRewards);
+      const finalInfo = await gringotts.getInfo();
+      expect(finalInfo._withdrawnStakingRewards).to.equal(bankedRewards);
     });
   });
 
