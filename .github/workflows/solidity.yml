@@ -13,6 +13,7 @@ jobs:
 
     env:
       SEI_DOCKER_IMAGE: ghcr.io/sei-protocol/sei:v6.0.5
+      SEI_TEST_LOGS: "1"
 
     defaults:
       run:

@@ -9,6 +9,9 @@ const DEFAULT_IMAGE = process.env.SEI_DOCKER_IMAGE || "seid:latest";
 const CHAIN_ID = "sei-chain";
 const MNEMONIC = "test test test test test test test test test test test junk";
 const BALANCE = "1000000000000000000000usei,1000000000000000000000uusdc,1000000000000000000000uatom";
+const DOCKER_COMMAND_TIMEOUT_MS = Number(process.env.SEI_DOCKER_COMMAND_TIMEOUT_MS || 120000);
+const LOG_ENABLED = process.env.SEI_TEST_LOGS === "1" || process.env.GITHUB_ACTIONS === "true";
+const STARTED_AT = Date.now();
 
 const ACCOUNT_SPECS = [
   ["funder", 0],
@@ -28,17 +31,25 @@ function deriveWallet(index) {
   return ethers.HDNodeWallet.fromPhrase(MNEMONIC, undefined, `m/44'/118'/0'/0/${index}`);
 }
 
+function log(message) {
+  if (!LOG_ENABLED) return;
+
+  const elapsed = ((Date.now() - STARTED_AT) / 1000).toFixed(1).padStart(6, " ");
+  console.log(`[sei-local +${elapsed}s] ${message}`);
+}
+
 function docker(args, options = {}) {
+  const command = ["docker", ...args].join(" ");
   const result = spawnSync("docker", args, {
     encoding: "utf8",
     input: options.input,
     stdio: options.stdio || ["pipe", "pipe", "pipe"],
+    timeout: options.timeoutMs || DOCKER_COMMAND_TIMEOUT_MS,
   });
 
   if (result.status !== 0) {
-    const command = ["docker", ...args].join(" ");
     throw new Error(
-      `Command failed: ${command}\nstdout:\n${result.stdout || ""}\nstderr:\n${result.stderr || ""}`
+      `Command failed: ${command}\nstatus: ${result.status}\nsignal: ${result.signal || ""}\nstdout:\n${result.stdout || ""}\nstderr:\n${result.stderr || ""}`
     );
   }
 
@@ -50,6 +61,7 @@ function dockerIgnoreErrors(args, options = {}) {
     encoding: "utf8",
     input: options.input,
     stdio: options.stdio || ["ignore", "ignore", "ignore"],
+    timeout: options.timeoutMs || DOCKER_COMMAND_TIMEOUT_MS,
   });
 }
 
@@ -82,8 +94,35 @@ function makeHomeWritable(home) {
   ], { stdio: "ignore" });
 }
 
+function makeHomeWritableIgnoreErrors(home) {
+  dockerIgnoreErrors([
+    "run",
+    "--rm",
+    "-v",
+    `${home}:/root/.sei`,
+    "--entrypoint",
+    "sh",
+    DEFAULT_IMAGE,
+    "-c",
+    "chmod -R 777 /root/.sei",
+  ]);
+}
+
 function removeContainer(containerName) {
   dockerIgnoreErrors(["rm", "-f", containerName]);
+}
+
+function logContainer(containerName, lines = 200) {
+  if (!LOG_ENABLED) return;
+
+  const output = spawnSync("docker", ["logs", "--tail", String(lines), containerName], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 10000,
+  });
+  if (output.status === 0 && (output.stdout || output.stderr)) {
+    log(`container logs for ${containerName}:\n${output.stdout || ""}${output.stderr || ""}`);
+  }
 }
 
 async function getFreePort() {
@@ -180,21 +219,27 @@ function parseProposalId(txJson) {
 
 async function waitForEvm(evmRpcUrl, timeoutMs = 120000) {
   const deadline = Date.now() + timeoutMs;
+  let attempts = 0;
   let lastError;
 
   while (Date.now() < deadline) {
+    attempts++;
     try {
       const [chainId, blockNumber] = await Promise.all([
         jsonRpc(evmRpcUrl, "eth_chainId"),
         jsonRpc(evmRpcUrl, "eth_blockNumber"),
       ]);
       if (BigInt(chainId) > 0n && BigInt(blockNumber) > 0n) {
+        log(`EVM RPC ready at block ${BigInt(blockNumber).toString()} on chain ${BigInt(chainId).toString()}`);
         return;
       }
     } catch (error) {
       lastError = error;
     }
 
+    if (attempts === 1 || attempts % 10 === 0) {
+      log(`waiting for EVM RPC at ${evmRpcUrl}; attempt ${attempts}; last error: ${lastError?.message || "none"}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 
@@ -215,6 +260,7 @@ async function jsonRpc(url, method, params = []) {
 }
 
 async function startSeiLocalNode() {
+  log(`checking Docker image ${DEFAULT_IMAGE}`);
   execFileSync("docker", ["image", "inspect", DEFAULT_IMAGE], { stdio: "ignore" });
 
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "gringotts-sei-"));
@@ -222,13 +268,18 @@ async function startSeiLocalNode() {
   const tendermintPort = await getFreePort();
   const restPort = await getFreePort();
   const containerName = `gringotts-sei-${process.pid}-${Date.now()}`;
+  log(`using Sei home ${home}`);
+  log(`reserved ports evm=${evmPort} tendermint=${tendermintPort} rest=${restPort}`);
 
   try {
+    log("initializing seid home");
     runSeid(home, ["init", "gringotts", "--chain-id", CHAIN_ID, "--overwrite"]);
     makeHomeWritable(home);
 
     const accounts = {};
+    log(`recovering ${ACCOUNT_SPECS.length} deterministic keys`);
     for (const [name, index] of ACCOUNT_SPECS) {
+      log(`recovering key ${name} at index ${index}`);
       runSeid(home, [
         "keys",
         "add",
@@ -250,6 +301,7 @@ async function startSeiLocalNode() {
       };
     }
 
+    log("adding genesis account balances");
     for (const [name] of ACCOUNT_SPECS) {
       runSeid(home, [
         "add-genesis-account",
@@ -260,6 +312,7 @@ async function startSeiLocalNode() {
       ]);
     }
 
+    log("creating validator gentx");
     runSeid(home, [
       "gentx",
       "validator",
@@ -271,11 +324,15 @@ async function startSeiLocalNode() {
     ]);
 
     makeHomeWritable(home);
+    log("patching genesis");
     updateGenesis(home);
+    log("collecting gentxs");
     runSeid(home, ["collect-gentxs"]);
     makeHomeWritable(home);
+    log("patching node config");
     updateConfig(home);
 
+    log("resolving validator address");
     const validatorAddress = runSeid(home, [
       "keys",
       "show",
@@ -285,7 +342,9 @@ async function startSeiLocalNode() {
       "--keyring-backend",
       "test",
     ]).trim();
+    log(`validator address ${validatorAddress}`);
 
+    log(`starting Sei container ${containerName}`);
     docker([
       "run",
       "-d",
@@ -310,7 +369,9 @@ async function startSeiLocalNode() {
     ]);
 
     const evmRpcUrl = `http://127.0.0.1:${evmPort}`;
+    log(`waiting for EVM RPC ${evmRpcUrl}`);
     await waitForEvm(evmRpcUrl);
+    log(`Sei container ${containerName} is ready`);
 
     return {
       image: DEFAULT_IMAGE,
@@ -322,11 +383,14 @@ async function startSeiLocalNode() {
       accounts,
       validatorAddress,
       cleanup() {
+        log(`cleaning up Sei container ${containerName}`);
         removeContainer(containerName);
-        makeHomeWritable(home);
+        makeHomeWritableIgnoreErrors(home);
         fs.rmSync(home, { recursive: true, force: true });
+        log(`removed Sei home ${home}`);
       },
       submitGovProposal({ title = "Gringotts test proposal", description = "test" } = {}) {
+        log(`submitting gov proposal: ${title}`);
         const output = docker([
           "exec",
           containerName,
@@ -362,9 +426,12 @@ async function startSeiLocalNode() {
       },
     };
   } catch (error) {
+    log(`local Sei startup failed: ${error.message}`);
+    logContainer(containerName);
     removeContainer(containerName);
-    makeHomeWritable(home);
+    makeHomeWritableIgnoreErrors(home);
     fs.rmSync(home, { recursive: true, force: true });
+    log(`removed failed Sei home ${home}`);
     throw error;
   }
 }
