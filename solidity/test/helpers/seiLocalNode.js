@@ -10,6 +10,7 @@ const CHAIN_ID = "sei-chain";
 const MNEMONIC = "test test test test test test test test test test test junk";
 const BALANCE = "1000000000000000000000usei,1000000000000000000000uusdc,1000000000000000000000uatom";
 const DOCKER_COMMAND_TIMEOUT_MS = Number(process.env.SEI_DOCKER_COMMAND_TIMEOUT_MS || 120000);
+const JSON_RPC_TIMEOUT_MS = Number(process.env.SEI_JSON_RPC_TIMEOUT_MS || 3000);
 const LOG_ENABLED = process.env.SEI_TEST_LOGS === "1" || process.env.GITHUB_ACTIONS === "true";
 const STARTED_AT = Date.now();
 
@@ -125,6 +126,27 @@ function logContainer(containerName, lines = 200) {
   }
 }
 
+function logContainerStatus(containerName) {
+  if (!LOG_ENABLED) return;
+
+  const status = spawnSync("docker", [
+    "inspect",
+    "--format",
+    "status={{.State.Status}} running={{.State.Running}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}",
+    containerName,
+  ], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 10000,
+  });
+
+  if (status.status === 0) {
+    log(`container ${containerName} ${status.stdout.trim()}`);
+  } else {
+    log(`container ${containerName} status unavailable: ${status.stderr || status.stdout || "unknown"}`);
+  }
+}
+
 async function getFreePort() {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -217,7 +239,7 @@ function parseProposalId(txJson) {
   throw new Error(`Could not find proposal_id in gov tx: ${txJson}`);
 }
 
-async function waitForEvm(evmRpcUrl, timeoutMs = 120000) {
+async function waitForEvm(evmRpcUrl, timeoutMs = 120000, containerName) {
   const deadline = Date.now() + timeoutMs;
   let attempts = 0;
   let lastError;
@@ -239,24 +261,47 @@ async function waitForEvm(evmRpcUrl, timeoutMs = 120000) {
 
     if (attempts === 1 || attempts % 10 === 0) {
       log(`waiting for EVM RPC at ${evmRpcUrl}; attempt ${attempts}; last error: ${lastError?.message || "none"}`);
+      if (containerName) {
+        logContainerStatus(containerName);
+      }
+    }
+    if (containerName && attempts % 30 === 0) {
+      logContainer(containerName, 80);
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 
+  if (containerName) {
+    logContainerStatus(containerName);
+    logContainer(containerName);
+  }
   throw new Error(`Timed out waiting for Sei EVM RPC. Last error: ${lastError?.message || "none"}`);
 }
 
 async function jsonRpc(url, method, params = []) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-  });
-  const payload = await response.json();
-  if (payload.error) {
-    throw new Error(payload.error.message || JSON.stringify(payload.error));
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), JSON_RPC_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      signal: controller.signal,
+    });
+    const payload = await response.json();
+    if (payload.error) {
+      throw new Error(payload.error.message || JSON.stringify(payload.error));
+    }
+    return payload.result;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error(`${method} timed out after ${JSON_RPC_TIMEOUT_MS}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  return payload.result;
 }
 
 async function startSeiLocalNode() {
@@ -370,7 +415,7 @@ async function startSeiLocalNode() {
 
     const evmRpcUrl = `http://127.0.0.1:${evmPort}`;
     log(`waiting for EVM RPC ${evmRpcUrl}`);
-    await waitForEvm(evmRpcUrl);
+    await waitForEvm(evmRpcUrl, 120000, containerName);
     log(`Sei container ${containerName} is ready`);
 
     return {
