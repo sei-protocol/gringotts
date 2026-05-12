@@ -85,6 +85,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     uint256 public withdrawnStakingRewards;
     uint256 public withdrawnUnlocked;
     uint256 public withdrawnLocked;
+    uint256 private bankedStakingRewards;
 
     // Admin governance
     mapping(address => bool) public admins;
@@ -260,13 +261,14 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         _requireWholeUsei(amount);
         uint256 pendingRewards = _getValidatorPendingRewards(validator);
         uint256 amountUsei = amount / WEI_PER_USEI;
+        uint256 expectedBalanceAfter = address(this).balance - amount;
 
         bool success = STAKING.delegate{value: amount}(validator);
         if (!success) revert StakingFailed();
 
         bytes32 validatorKey = _trackValidator(validator);
         trackedStakedUsei[validatorKey] += amountUsei;
-        _recordConfiguredStakingRewards(pendingRewards);
+        _recordAutoWithdrawnStakingRewards(pendingRewards, expectedBalanceAfter);
         emit Delegated(validator, amount);
     }
 
@@ -282,21 +284,24 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         uint256 amount
     ) external onlyOperator nonReentrant {
         uint256 amountUsei = _weiToUsei(amount);
-        uint256 pendingRewards = _getValidatorPendingRewards(srcValidator);
-        if (!_stringsEqual(srcValidator, dstValidator)) {
-            pendingRewards += _getValidatorPendingRewards(dstValidator);
+        uint256 expectedBalanceAfter = address(this).balance;
+        bool sameValidator = _stringsEqual(srcValidator, dstValidator);
+        IDistribution.Rewards memory rewardsInfo = DISTRIBUTION.rewards(address(this));
+        uint256 pendingRewards = _getValidatorWithdrawableRewards(rewardsInfo, srcValidator);
+        if (!sameValidator) {
+            pendingRewards += _getValidatorWithdrawableRewards(rewardsInfo, dstValidator);
         }
 
         bool success = STAKING.redelegate(srcValidator, dstValidator, amountUsei);
         if (!success) revert StakingFailed();
 
         bytes32 srcKey = _trackValidator(srcValidator);
-        bytes32 dstKey = _trackValidator(dstValidator);
-        if (!_stringsEqual(srcValidator, dstValidator)) {
+        if (!sameValidator) {
+            bytes32 dstKey = _trackValidator(dstValidator);
             _subtractTrackedStaked(srcKey, amountUsei);
             trackedStakedUsei[dstKey] += amountUsei;
         }
-        _recordConfiguredStakingRewards(pendingRewards);
+        _recordAutoWithdrawnStakingRewards(pendingRewards, expectedBalanceAfter);
         emit Redelegated(srcValidator, dstValidator, amount);
     }
 
@@ -308,13 +313,14 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     function undelegate(string calldata validator, uint256 amount) external onlyOperator nonReentrant {
         uint256 amountUsei = _weiToUsei(amount);
         uint256 pendingRewards = _getValidatorPendingRewards(validator);
+        uint256 expectedBalanceAfter = address(this).balance;
 
         bool success = STAKING.undelegate(validator, amountUsei);
         if (!success) revert StakingFailed();
 
         bytes32 validatorKey = _trackValidator(validator);
         _subtractTrackedStaked(validatorKey, amountUsei);
-        _recordConfiguredStakingRewards(pendingRewards);
+        _recordAutoWithdrawnStakingRewards(pendingRewards, expectedBalanceAfter);
         emit Undelegated(validator, amount);
     }
 
@@ -340,6 +346,9 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         // First, send any rewards already in contract balance (from auto-withdrawals)
         uint256 totalWithdrawn = _calculateWithdrawnRewards();
         _sendStakingRewards(totalWithdrawn);
+        if (totalWithdrawn > 0) {
+            bankedStakingRewards -= totalWithdrawn;
+        }
 
         if (validators.length > 0) {
             IDistribution.Rewards memory rewardsInfo = DISTRIBUTION.rewards(address(this));
@@ -894,12 +903,20 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         emit StakingRewardsWithdrawn(stakingRewardAddress, amount);
     }
 
-    function _recordConfiguredStakingRewards(uint256 amount) internal {
-        if (!stakingRewardWithdrawAddressConfigured) {
+    function _recordAutoWithdrawnStakingRewards(uint256 pendingRewards, uint256 expectedBalanceAfter) internal {
+        if (pendingRewards == 0) {
             return;
         }
 
-        _recordWithdrawnStakingRewards(amount);
+        if (stakingRewardWithdrawAddressConfigured) {
+            _recordWithdrawnStakingRewards(pendingRewards);
+            return;
+        }
+
+        uint256 currentBalance = address(this).balance;
+        if (currentBalance > expectedBalanceAfter) {
+            bankedStakingRewards += currentBalance - expectedBalanceAfter;
+        }
     }
 
     function _sendStakingRewards(uint256 amount) internal {
@@ -977,31 +994,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
 
     function _calculateWithdrawnRewards() internal view returns (uint256) {
         uint256 bankBalance = address(this).balance;
-        uint256 withdrawnPrincipal = withdrawnLocked + withdrawnUnlocked;
-
-        // Calculate staked amount from all delegations (with pagination)
-        uint256 staked = _getTotalStaked();
-
-        uint256 principalInBank = 0;
-        if (withdrawnPrincipal + staked < totalAmount) {
-            principalInBank = totalAmount - withdrawnPrincipal - staked;
-        }
-
-        if (principalInBank < bankBalance) {
-            return bankBalance - principalInBank;
-        }
-        return 0;
-    }
-
-    /**
-     * @notice Get total staked amount across all validators Gringotts has used
-     * @return total Total staked amount in wei
-     */
-    function _getTotalStaked() internal view returns (uint256 total) {
-        for (uint256 i = 0; i < trackedValidatorList.length; i++) {
-            total += _useiToWei(trackedStakedUsei[_validatorKey(trackedValidatorList[i])]);
-        }
-        return total;
+        return bankedStakingRewards < bankBalance ? bankedStakingRewards : bankBalance;
     }
 
     function _getValidatorPendingRewards(string calldata validator) internal view returns (uint256) {
@@ -1040,10 +1033,6 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     function _weiToUsei(uint256 amountWei) internal pure returns (uint256) {
         _requireWholeUsei(amountWei);
         return amountWei / WEI_PER_USEI;
-    }
-
-    function _useiToWei(uint256 amountUsei) internal pure returns (uint256) {
-        return amountUsei * WEI_PER_USEI;
     }
 
     function _containsValidator(
@@ -1156,5 +1145,5 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
      * @dev Reserved storage space for future upgrades
      * This allows adding new state variables in upgrades without shifting existing storage
      */
-    uint256[45] private __gap;
+    uint256[44] private __gap;
 }

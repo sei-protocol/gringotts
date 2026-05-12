@@ -542,9 +542,10 @@ describe("Gringotts on a local Sei chain", function () {
       expect(info._withdrawnStakingRewards).to.equal(0n);
     });
 
-    it("forwards banked rewards even when they offset staked principal", async function () {
-      const total = ethers.parseEther("5");
+    it("forwards banked auto-withdrawn rewards while principal is unbonding", async function () {
       const now = await latestTimestamp();
+      const total = ethers.parseEther("100000000");
+      const stakeAmount = ethers.parseEther("50000000");
       const { gringotts } = await deployProxy({
         schedule: {
           timestamps: [now + 100_000],
@@ -552,25 +553,24 @@ describe("Gringotts on a local Sei chain", function () {
           total,
         },
       });
-      const rewardAmount = ethers.parseEther("1");
       const operator = gringotts.connect(wallets.operator1);
 
-      await (await operator.delegate(chain.validatorAddress, rewardAmount, { gasLimit: GAS })).wait();
-      await (await wallets.funder.sendTransaction({
-        to: await gringotts.getAddress(),
-        value: rewardAmount,
-      })).wait();
+      await (await operator.delegate(chain.validatorAddress, stakeAmount, { gasLimit: GAS })).wait();
+      await waitForPendingReward(gringotts);
+      const beforeUndelegate = await gringotts.getInfo();
+      await (await operator.undelegate(chain.validatorAddress, stakeAmount, { gasLimit: GAS })).wait();
 
-      const beforeInfo = await gringotts.getInfo();
-      expect(beforeInfo._balance).to.equal(total);
-
+      const afterUndelegate = await gringotts.getInfo();
+      const bankedRewards = afterUndelegate._balance - beforeUndelegate._balance;
+      expect(bankedRewards).to.be.greaterThan(0n);
       const beforeRewardBalance = await provider.getBalance(address("reward"));
       await (await operator.initiateWithdrawReward([], { gasLimit: GAS })).wait();
       const afterRewardBalance = await provider.getBalance(address("reward"));
 
-      expect(afterRewardBalance - beforeRewardBalance).to.equal(rewardAmount);
+      expect(afterRewardBalance - beforeRewardBalance).to.equal(bankedRewards);
       const afterInfo = await gringotts.getInfo();
-      expect(afterInfo._withdrawnStakingRewards).to.equal(rewardAmount);
+      expect(afterInfo._withdrawnStakingRewards).to.equal(bankedRewards);
+      expect(afterInfo._balance).to.equal(beforeUndelegate._balance);
     });
   });
 
