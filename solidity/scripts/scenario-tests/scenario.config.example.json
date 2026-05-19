@@ -1,0 +1,36 @@
+{
+  "proxyAddress": "0xE79F135F45D571352f7d570Da1E2a295f966A58B",
+  "implementationAddress": "0xff7b70EE3ddB75C209d5A1c249eC9bC21c4f6aEF",
+  "actors": {
+    "adminPrivateKeys": [],
+    "operatorPrivateKey": "",
+    "nonAdminPrivateKey": "",
+    "nonOperatorPrivateKey": "",
+    "newAdminPrivateKey": "",
+    "newOperatorPrivateKey": "",
+    "implementationDeployerPrivateKey": ""
+  },
+  "validators": {
+    "primary": "",
+    "secondary": "",
+    "tertiary": "",
+    "invalid": "seivaloper1invalidvalidatoraddress"
+  },
+  "amounts": {
+    "delegateWei": "1000000000000000000",
+    "smallWei": "250000000000000000",
+    "dustWei": "1",
+    "withdrawWei": "500000000000000000"
+  },
+  "governance": {
+    "govProposalId": 0,
+    "voteOption": 1
+  },
+  "execution": {
+    "execute": false,
+    "waitForExpiry": false,
+    "allowDestructive": false,
+    "runStress": false,
+    "gasLimit": ""
+  }
+}

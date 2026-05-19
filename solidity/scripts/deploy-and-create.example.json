@@ -1,24 +1,25 @@
 {
   "admins": [
-    "0x1111111111111111111111111111111111111111",
-    "0x2222222222222222222222222222222222222222"
+    "0x28fc161d44DeBA46E3d4aD2416dB84044035b02a",
+    "0x806465dc3e5eF9dC5AFf42a5b8744c94f0ddEc78",
+    "0x06868083F2B914e52dC09A6e22994EA8ff2FDa49"
   ],
   "operators": [
-    "0x3333333333333333333333333333333333333333"
+    "0xAE9Ed5c5397d74FC5FbF396d0e0de4663b4895B9"
   ],
   "vestingTimestamps": [
-    1893456000,
-    1924992000,
-    1956528000
+    1779199200,
+    1779242400,
+    1779285600
   ],
   "vestingAmounts": [
     "1000000000000000000",
     "1000000000000000000",
     "1000000000000000000"
   ],
-  "unlockDistributionAddress": "0x4444444444444444444444444444444444444444",
-  "stakingRewardAddress": "0x5555555555555555555555555555555555555555",
-  "maxVotingPeriod": 3600,
-  "adminVotingThresholdPercentage": 75,
+  "unlockDistributionAddress": "0x7fd42b44F08eC90Aa7C82f9C40235Dc66b86C201",
+  "stakingRewardAddress": "0x6199d949c97e818abd967EC9EcA3e89FFbE92C44",
+  "maxVotingPeriod": 300,
+  "adminVotingThresholdPercentage": 50,
   "totalAmount": "3000000000000000000"
 }

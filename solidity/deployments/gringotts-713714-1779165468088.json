@@ -1,0 +1,37 @@
+{
+  "deployedAt": "2026-05-19T04:37:48.088Z",
+  "network": "harbor-shortunbond-testnet",
+  "chainId": "713714",
+  "deployer": "0x9eFbcf57C4DE1b750749d840B9fB7CcF03e239Ac",
+  "configFile": "/Users/xiaoyuchen/repos/gringotts/solidity/scripts/deploy-and-create.example.json",
+  "implementation": "0xff7b70EE3ddB75C209d5A1c249eC9bC21c4f6aEF",
+  "factory": "0xEaaF4eF2Ef3E4926c236998301cb1248F6C19687",
+  "proxy": "0xE79F135F45D571352f7d570Da1E2a295f966A58B",
+  "createTransaction": "0x769a45778d56e729d5a49ca7f5ed6693ee889756c69ba9579ee8cfe5852ab184",
+  "params": {
+    "admins": [
+      "0x28fc161d44DeBA46E3d4aD2416dB84044035b02a",
+      "0x806465dc3e5eF9dC5AFf42a5b8744c94f0ddEc78",
+      "0x06868083F2B914e52dC09A6e22994EA8ff2FDa49"
+    ],
+    "operators": [
+      "0xAE9Ed5c5397d74FC5FbF396d0e0de4663b4895B9"
+    ],
+    "vestingTimestamps": [
+      "1779199200",
+      "1779242400",
+      "1779285600"
+    ],
+    "vestingAmounts": [
+      "1000000000000000000",
+      "1000000000000000000",
+      "1000000000000000000"
+    ],
+    "unlockDistributionAddress": "0x7fd42b44F08eC90Aa7C82f9C40235Dc66b86C201",
+    "stakingRewardAddress": "0x6199d949c97e818abd967EC9EcA3e89FFbE92C44",
+    "maxVotingPeriod": "300",
+    "adminVotingThresholdPercentage": "50",
+    "totalAmount": "3000000000000000000",
+    "vestingTotal": "3000000000000000000"
+  }
+}

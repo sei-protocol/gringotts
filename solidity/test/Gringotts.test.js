@@ -58,6 +58,13 @@ describe("Gringotts on a local Sei chain", function () {
     return implementation;
   }
 
+  async function deployDummyV2Implementation(signer = wallets.funder) {
+    const GringottsV2Dummy = await ethers.getContractFactory("GringottsV2Dummy", signer);
+    const implementation = await GringottsV2Dummy.deploy({ gasLimit: GAS });
+    await implementation.waitForDeployment();
+    return implementation;
+  }
+
   async function deployProxy({
     implementation,
     admins = [address("admin1"), address("admin2"), address("admin3")],
@@ -730,6 +737,31 @@ describe("Gringotts on a local Sei chain", function () {
       expect(afterRewardBalance - beforeRewardBalance).to.equal(bankedRewards);
       const finalInfo = await gringotts.getInfo();
       expect(finalInfo._withdrawnStakingRewards).to.equal(bankedRewards);
+    });
+  });
+
+  describe("Upgrades", function () {
+    it("upgrades through admin proposals to an implementation with a new dummy function", async function () {
+      const { gringotts } = await deployProxy();
+      const originalAdmins = await gringotts.listAdmins();
+      const originalOperators = await gringotts.listOperators();
+      const originalTotalAmount = await gringotts.totalAmount();
+
+      const newImplementation = await deployDummyV2Implementation();
+      await (await gringotts.connect(wallets.admin1).proposeUpgrade(await newImplementation.getAddress(), {
+        gasLimit: GAS,
+      })).wait();
+      await passAndProcess(gringotts);
+
+      expect(await gringotts.getImplementation()).to.equal(await newImplementation.getAddress());
+      expect(await gringotts.listAdmins()).to.deep.equal(originalAdmins);
+      expect(await gringotts.listOperators()).to.deep.equal(originalOperators);
+      expect(await gringotts.totalAmount()).to.equal(originalTotalAmount);
+
+      const GringottsV2Dummy = await ethers.getContractFactory("GringottsV2Dummy", wallets.admin1);
+      const upgraded = GringottsV2Dummy.attach(await gringotts.getAddress());
+      expect(await upgraded.dummyVersion()).to.equal("gringotts-v2-dummy");
+      expect(await upgraded.dummyNumber()).to.equal(2n);
     });
   });
 
