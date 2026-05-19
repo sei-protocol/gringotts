@@ -9,7 +9,8 @@
     "coverage": "hardhat coverage",
     "clean": "hardhat clean",
     "node": "hardhat node",
-    "deploy:local": "hardhat run scripts/deploy.js --network localhost"
+    "deploy:local": "hardhat run scripts/deploy.js --network localhost",
+    "deploy:create": "hardhat run scripts/deploy-and-create.js"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^4.0.0",

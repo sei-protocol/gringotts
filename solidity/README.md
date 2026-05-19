@@ -132,6 +132,16 @@ const proxyAddress = await factory.createGringotts(
 const gringotts = Gringotts.attach(proxyAddress);
 ```
 
+### Deploy and Create from JSON
+
+Create a config file using `scripts/deploy-and-create.example.json` as the template, then run:
+
+```bash
+DEPLOY_CONFIG=scripts/deploy-and-create.example.json npm run deploy:create -- --network sei-testnet
+```
+
+The script deploys the `Gringotts` implementation, deploys `GringottsFactory`, then calls `factory.createGringotts(...)` with the JSON inputs. `totalAmount` is optional; when present, it must equal the sum of `vestingAmounts`; when omitted, the script sends the sum automatically.
+
 After deployment, submit and process an `UpdateStakingRewardDistributionAddress` proposal for the configured reward address. The initializer records `stakingRewardAddress`, but it does not call the distribution precompile because a proxy address is not associated while its constructor is still running.
 
 ### Direct Deployment (without factory)
