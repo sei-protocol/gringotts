@@ -5,8 +5,13 @@ const hre = require("hardhat");
 const { ethers } = hre;
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const ADDR_PRECOMPILE = "0x0000000000000000000000000000000000001004";
 const STAKING_PRECOMPILE = "0x0000000000000000000000000000000000001005";
 const DEFAULT_CONFIG_PATH = "scripts/scenario-tests/scenario.config.example.json";
+
+const ADDR_ABI = [
+  "function getSeiAddr(address addr) view returns (string response)",
+];
 
 const STAKING_ABI = [
   "function delegation(address delegator, string valAddress) view returns (tuple(tuple(uint256 amount,string denom) balance, tuple(string delegator_address,uint256 shares,uint256 decimals,string validator_address) delegation))",
@@ -75,6 +80,7 @@ function loadScenarioConfig() {
   const actorConfig = fileConfig.actors || {};
   const validatorConfig = fileConfig.validators || {};
   const amountConfig = fileConfig.amounts || {};
+  const distributionConfig = fileConfig.distribution || {};
   const executionConfig = fileConfig.execution || {};
   const govConfig = fileConfig.governance || {};
 
@@ -122,6 +128,26 @@ function loadScenarioConfig() {
       dustWei: toWei(process.env.DUST_WEI || amountConfig.dustWei || "1", "dustWei"),
       withdrawWei: toWei(process.env.WITHDRAW_WEI || amountConfig.withdrawWei || ethers.parseEther("0.5").toString(), "withdrawWei"),
     },
+    distribution: {
+      stakingRewardPrivateKey:
+        process.env.STAKING_REWARD_PRIVATE_KEY ||
+        distributionConfig.stakingRewardPrivateKey ||
+        "",
+      associationFunderPrivateKey:
+        process.env.ASSOCIATION_FUNDER_PRIVATE_KEY ||
+        distributionConfig.associationFunderPrivateKey ||
+        "",
+      associationFundWei: toWei(
+        process.env.ASSOCIATION_FUND_WEI ||
+          distributionConfig.associationFundWei ||
+          ethers.parseEther("0.01").toString(),
+        "associationFundWei"
+      ),
+      associationReturnWei: toWei(
+        process.env.ASSOCIATION_RETURN_WEI || distributionConfig.associationReturnWei || "1",
+        "associationReturnWei"
+      ),
+    },
     execution: {
       execute: parseBool(process.env.EXECUTE, parseBool(executionConfig.execute, false)),
       waitForExpiry: parseBool(process.env.WAIT_FOR_EXPIRY, parseBool(executionConfig.waitForExpiry, false)),
@@ -145,6 +171,23 @@ function connectStakingPrecompile() {
   return new ethers.Contract(STAKING_PRECOMPILE, STAKING_ABI, ethers.provider);
 }
 
+function connectAddressPrecompile() {
+  return new ethers.Contract(ADDR_PRECOMPILE, ADDR_ABI, ethers.provider);
+}
+
+async function getAssociatedSeiAddress(evmAddress) {
+  return connectAddressPrecompile().getSeiAddr(evmAddress);
+}
+
+async function addressAssociation(address) {
+  try {
+    const seiAddress = await getAssociatedSeiAddress(address);
+    return { associated: true, seiAddress };
+  } catch {
+    return { associated: false, seiAddress: "" };
+  }
+}
+
 function walletFromPrivateKey(privateKey, label) {
   if (!privateKey) return null;
   try {
@@ -152,6 +195,85 @@ function walletFromPrivateKey(privateKey, label) {
   } catch (error) {
     throw new Error(`Invalid private key for ${label}: ${error.message}`);
   }
+}
+
+async function signerAddress(signer) {
+  if (signer.address) return signer.address;
+  return signer.getAddress();
+}
+
+async function defaultFunderSigner() {
+  const [funder] = await ethers.getSigners();
+  if (!funder) throw new Error("No default signer available to fund association bootstrap");
+  return funder;
+}
+
+async function ensureStakingRewardAddressAssociated(config, runner, rewardAddress) {
+  const address = ethers.getAddress(rewardAddress);
+  const current = await addressAssociation(address);
+  if (current.associated) {
+    runner.note(`staking reward address already associated as ${current.seiAddress}`);
+    return true;
+  }
+
+  if (!config.execution.execute) {
+    runner.skip("staking reward address is unassociated; set EXECUTE=true with STAKING_REWARD_PRIVATE_KEY to bootstrap it");
+    return false;
+  }
+
+  if (!config.distribution.stakingRewardPrivateKey) {
+    runner.skip("staking reward address is unassociated; provide distribution.stakingRewardPrivateKey or STAKING_REWARD_PRIVATE_KEY");
+    return false;
+  }
+
+  const rewardWallet = walletFromPrivateKey(
+    config.distribution.stakingRewardPrivateKey,
+    "stakingRewardPrivateKey"
+  );
+  if (ethers.getAddress(rewardWallet.address) !== address) {
+    runner.fail(`stakingRewardPrivateKey resolves to ${rewardWallet.address}, not ${address}`);
+    return false;
+  }
+
+  const funder = config.distribution.associationFunderPrivateKey
+    ? walletFromPrivateKey(config.distribution.associationFunderPrivateKey, "associationFunderPrivateKey")
+    : await defaultFunderSigner();
+  const funderAddress = await signerAddress(funder);
+
+  if (config.distribution.associationFundWei > 0n) {
+    const fundTx = await funder.sendTransaction(
+      txOverrides(config, {
+        to: address,
+        value: config.distribution.associationFundWei,
+      })
+    );
+    await fundTx.wait();
+    runner.pass(
+      "funded staking reward address for association",
+      `${weiToSei(config.distribution.associationFundWei)} SEI from ${funderAddress}`
+    );
+  }
+
+  const associationTx = await rewardWallet.sendTransaction(
+    txOverrides(config, {
+      to: funderAddress,
+      value: config.distribution.associationReturnWei,
+    })
+  );
+  await associationTx.wait();
+  runner.pass(
+    "staking reward address sent association transaction",
+    `${weiToSei(config.distribution.associationReturnWei)} SEI to ${funderAddress}`
+  );
+
+  const updated = await addressAssociation(address);
+  if (!updated.associated) {
+    runner.fail("staking reward address is still unassociated after bootstrap transaction");
+    return false;
+  }
+
+  runner.pass("staking reward address associated", updated.seiAddress);
+  return true;
 }
 
 function randomReadOnlyWallet(label) {
@@ -327,6 +449,10 @@ module.exports = {
   loadScenarioConfig,
   connectGringotts,
   connectStakingPrecompile,
+  connectAddressPrecompile,
+  getAssociatedSeiAddress,
+  addressAssociation,
+  ensureStakingRewardAddressAssociated,
   loadActors,
   txOverrides,
   staticCall,

@@ -3,6 +3,7 @@ const {
   connectStakingPrecompile,
   expectRevert,
   expectSuccess,
+  getAssociatedSeiAddress,
   loadActors,
   loadScenarioConfig,
   requireActor,
@@ -259,7 +260,9 @@ async function main() {
     const unbonding = await staking.delegatorUnbondingDelegations(config.proxyAddress, "0x");
     runner.pass(`queried delegatorUnbondingDelegations`, `${unbonding.unbondingDelegations.length} entries`);
 
-    const redelegations = await staking.redelegations(config.proxyAddress, "", "", "0x");
+    // redelegations takes a bech32 delegator string, unlike the other delegator queries.
+    const delegatorSeiAddress = await getAssociatedSeiAddress(config.proxyAddress);
+    const redelegations = await staking.redelegations(delegatorSeiAddress, "", "", "0x");
     runner.pass(`queried redelegations`, `${redelegations.redelegations.length} entries`);
   });
 

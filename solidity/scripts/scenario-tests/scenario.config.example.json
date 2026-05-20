@@ -22,6 +22,12 @@
     "dustWei": "1",
     "withdrawWei": "500000000000000000"
   },
+  "distribution": {
+    "stakingRewardPrivateKey": "",
+    "associationFunderPrivateKey": "",
+    "associationFundWei": "10000000000000000",
+    "associationReturnWei": "1"
+  },
   "governance": {
     "govProposalId": 0,
     "voteOption": 1

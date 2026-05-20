@@ -30,6 +30,7 @@ Then fill in signer private keys and validator addresses:
 - `adminPrivateKeys`: enough current admin keys to pass proposals.
 - `operatorPrivateKey`: a current operator key for staking/withdrawal flows.
 - `implementationDeployerPrivateKey`: optional funded key for `upgrade-tests.js`; it does not need admin permission.
+- `distribution.stakingRewardPrivateKey`: optional key for the contract's current staking reward address. If that address is not yet associated, mutating reward-address proposal tests use the default Hardhat signer, or `distribution.associationFunderPrivateKey` when set, to fund it and then send a tiny transaction back so Sei creates the address association. Do not commit this key.
 
 ```bash
 SCENARIO_CONFIG=scripts/scenario-tests/scenario.local.json \
@@ -78,6 +79,15 @@ Run one group at a time when sending transactions. Example:
 EXECUTE=true \
 SCENARIO_CONFIG=scripts/scenario-tests/scenario.local.json \
   npx hardhat --config hardhat.harbor-shortunbond.config.js run scripts/scenario-tests/access-tests.js --network harbor-shortunbond-testnet
+```
+
+If the current staking reward address is not associated yet, provide its key when running reward proposal flows. The script preserves the contract's reward address, funds that address from the default Hardhat signer, and sends a tiny transaction back so Sei creates the association before processing the proposal:
+
+```bash
+EXECUTE=true \
+STAKING_REWARD_PRIVATE_KEY=0x... \
+SCENARIO_CONFIG=scripts/scenario-tests/scenario.local.json \
+  npx hardhat --config hardhat.harbor-shortunbond.config.js run scripts/scenario-tests/reward-tests.js --network harbor-shortunbond-testnet
 ```
 
 Run the live upgrade/migration-style check. This deploys `GringottsV2Dummy`, proposes an upgrade, votes/processes it, then calls the new dummy functions through the existing proxy:

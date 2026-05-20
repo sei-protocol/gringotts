@@ -1,5 +1,6 @@
 const {
   connectGringotts,
+  ensureStakingRewardAddressAssociated,
   ethers,
   expectRevert,
   loadActors,
@@ -86,6 +87,13 @@ async function main() {
     }
 
     const info = await contract.getInfo();
+    const rewardAddressAssociated = await ensureStakingRewardAddressAssociated(
+      config,
+      runner,
+      info._stakingRewardAddress
+    );
+    if (!rewardAddressAssociated) return;
+
     const proposalId = await createProposal(config, runner, contract, actors.admin, "proposeUpdateStakingRewardDistributionAddress", [
       info._stakingRewardAddress,
     ]);
@@ -201,7 +209,7 @@ async function main() {
       return;
     }
 
-    runner.note("current Gringotts has no CannotRemoveLastOperator invariant; this scenario is expected to reveal that mismatch if executed.");
+    runner.note("Gringotts should preserve at least one operator so operational actions remain recoverable.");
     await expectRevert(runner, "last operator removal should fail under CW invariant", () =>
       staticCall(contract, actors.admin, "updateOp", [operators[0], true])
     );

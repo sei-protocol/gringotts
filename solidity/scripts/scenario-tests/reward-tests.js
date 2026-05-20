@@ -1,5 +1,6 @@
 const {
   connectGringotts,
+  ensureStakingRewardAddressAssociated,
   expectSuccess,
   loadActors,
   loadScenarioConfig,
@@ -112,6 +113,13 @@ async function main() {
     }
 
     const info = await contract.getInfo();
+    const rewardAddressAssociated = await ensureStakingRewardAddressAssociated(
+      config,
+      runner,
+      info._stakingRewardAddress
+    );
+    if (!rewardAddressAssociated) return;
+
     const proposalId = await createProposal(config, runner, contract, actors.admin, "proposeUpdateStakingRewardDistributionAddress", [
       info._stakingRewardAddress,
     ]);

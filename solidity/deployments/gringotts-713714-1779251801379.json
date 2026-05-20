@@ -1,0 +1,37 @@
+{
+  "deployedAt": "2026-05-20T04:36:41.379Z",
+  "network": "harbor-shortunbond-testnet",
+  "chainId": "713714",
+  "deployer": "0x9eFbcf57C4DE1b750749d840B9fB7CcF03e239Ac",
+  "configFile": "/tmp/gringotts-deploy-test-config.json",
+  "implementation": "0x0b18CA044eABCBD5aC80357E9DF6EB28f5385750",
+  "factory": "0x732F65Ab5Ee3BD5496127705532360D7F84774dF",
+  "proxy": "0xD1984F3e3b3DbB7425EeCfD9309075355c27a55b",
+  "createTransaction": "0xf7860f5aea0eeee58a5bffc90998289a824dc6115a247c0c66a27446b4146f7a",
+  "params": {
+    "admins": [
+      "0x28fc161d44DeBA46E3d4aD2416dB84044035b02a",
+      "0x806465dc3e5eF9dC5AFf42a5b8744c94f0ddEc78",
+      "0x06868083F2B914e52dC09A6e22994EA8ff2FDa49"
+    ],
+    "operators": [
+      "0xAE9Ed5c5397d74FC5FbF396d0e0de4663b4895B9"
+    ],
+    "vestingTimestamps": [
+      "1779251685",
+      "1779251715",
+      "1779251745"
+    ],
+    "vestingAmounts": [
+      "1000000000000000000",
+      "1000000000000000000",
+      "1000000000000000000"
+    ],
+    "unlockDistributionAddress": "0x7fd42b44F08eC90Aa7C82f9C40235Dc66b86C201",
+    "stakingRewardAddress": "0x6199d949c97e818abd967EC9EcA3e89FFbE92C44",
+    "maxVotingPeriod": "15",
+    "adminVotingThresholdPercentage": "50",
+    "totalAmount": "3000000000000000000",
+    "vestingTotal": "3000000000000000000"
+  }
+}

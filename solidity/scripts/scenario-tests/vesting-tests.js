@@ -18,6 +18,28 @@ const {
   voteUntilPassed,
 } = require("./lib/proposals");
 
+function vestedAmountFromSchedule(timestamps, amounts, timestamp) {
+  return amounts.reduce((sum, amount, index) => {
+    if (Number(timestamps[index]) > timestamp) return sum;
+    return sum + amount;
+  }, 0n);
+}
+
+function vestedTrancheIndexes(timestamps, timestamp) {
+  return timestamps
+    .map((ts, index) => (Number(ts) <= timestamp ? index : -1))
+    .filter((index) => index >= 0);
+}
+
+async function loadVestingState(contract) {
+  const [timestamps, amounts] = await contract.getVestingSchedule();
+  const info = await contract.getInfo();
+  const latestBlock = await ethers.provider.getBlock("latest");
+  const now = Number(latestBlock.timestamp);
+
+  return { timestamps, amounts, info, now };
+}
+
 async function main() {
   const config = loadScenarioConfig();
   const runner = new ScenarioRunner("Vesting Tests", config);
@@ -26,11 +48,8 @@ async function main() {
   const contract = await connectGringotts(config.proxyAddress);
   const actors = loadActors(config);
 
-  const [timestamps, amounts] = await contract.getVestingSchedule();
-  const info = await contract.getInfo();
-  const now = Math.floor(Date.now() / 1000);
-
   await runner.scenario("Query totalVested before/exactly/just-before vest timestamps", async () => {
+    const { timestamps, amounts, now } = await loadVestingState(contract);
     if (timestamps.length === 0) {
       runner.skip("vesting schedule is empty");
       return;
@@ -77,9 +96,11 @@ async function main() {
   await runner.scenario("Withdraw less/equal/greater than vested amount", async () => {
     if (!requireActor(runner, actors.operator, "operator")) return;
 
+    const { timestamps, amounts, info, now } = await loadVestingState(contract);
     const totalVested = await contract.getTotalVested();
-    const withdrawable = totalVested > info._withdrawnUnlocked ? totalVested - info._withdrawnUnlocked : 0n;
-    runner.note(`withdrawable by vesting math now: ${weiToSei(withdrawable)} SEI`);
+    const withdrawable = vestedAmountFromSchedule(timestamps, amounts, now);
+    runner.note(`withdrawable in current vesting schedule now: ${weiToSei(withdrawable)} SEI`);
+    runner.note(`getTotalVested=${weiToSei(totalVested)} SEI; withdrawnUnlocked=${weiToSei(info._withdrawnUnlocked)} SEI`);
 
     if (withdrawable === 0n) {
       await expectRevert(runner, "withdraw greater than vested fails", () =>
@@ -116,23 +137,36 @@ async function main() {
 
   await runner.scenario("Withdraw across two vested tranches and fully withdraw all vested tranches", async () => {
     if (!requireActor(runner, actors.operator, "operator")) return;
+    const { timestamps, amounts, now } = await loadVestingState(contract);
     if (timestamps.length < 2) {
       runner.skip("needs at least two tranches");
       return;
     }
 
-    const twoTrancheAmount = amounts[0] + amounts[1] / 2n;
-    if (now < Number(timestamps[1])) {
-      runner.skip("second tranche is not vested yet on the live chain");
+    const vestedIndexes = vestedTrancheIndexes(timestamps, now);
+    if (vestedIndexes.length < 2) {
+      runner.skip("needs at least two currently vested remaining tranches");
       return;
     }
+
+    const firstVestedIndex = vestedIndexes[0];
+    const secondVestedIndex = vestedIndexes[1];
+    const secondPartialAmount = amounts[secondVestedIndex] > 1n
+      ? amounts[secondVestedIndex] / 2n
+      : amounts[secondVestedIndex];
+    const twoTrancheAmount = amounts[firstVestedIndex] + secondPartialAmount;
+    const allVestedAmount = vestedAmountFromSchedule(timestamps, amounts, now);
 
     await expectSuccess(runner, "withdraw across two vested tranches static-call succeeds", () =>
       staticCall(contract, actors.operator, "initiateWithdrawUnlocked", [twoTrancheAmount])
     );
+    await expectSuccess(runner, "withdraw all currently vested tranches static-call succeeds", () =>
+      staticCall(contract, actors.operator, "initiateWithdrawUnlocked", [allVestedAmount])
+    );
 
     if (!config.execution.execute) {
       runner.skip("set EXECUTE=true to inspect partial remainder after actual withdrawal");
+      return;
     }
   });
 
@@ -163,6 +197,7 @@ async function main() {
       return;
     }
 
+    const { info } = await loadVestingState(contract);
     const proposalId = await createProposal(config, runner, contract, actors.admin, "proposeEmergencyWithdraw", [
       info._unlockDistributionAddress,
     ]);
