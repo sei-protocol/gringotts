@@ -160,6 +160,7 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
     error InvalidImplementation();
     error UpgradeNotApproved();
     error CannotRemoveLastAdmin();
+    error CannotRemoveLastOperator();
     error DuplicateAddress();
     error InvalidVoteOption();
     error GovVoteFailed();
@@ -1086,6 +1087,8 @@ contract Gringotts is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable
         if (!operators[operator]) {
             return;
         }
+        if (operatorCount <= 1) revert CannotRemoveLastOperator();
+
         operators[operator] = false;
         operatorCount--;
         _removeAddressFromList(operatorList, operatorListIndexPlusOne, operator);
