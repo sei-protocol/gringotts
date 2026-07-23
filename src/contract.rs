@@ -255,9 +255,12 @@ pub fn instantiate(
             percentage: Decimal::percent(msg.admin_voting_threshold_percentage as u64),
         },
     )?;
-    WITHDRAWN_STAKING_REWARDS.save(deps.storage, &0)?;
-    WITHDRAWN_UNLOCKED.save(deps.storage, &0)?;
-    WITHDRAWN_LOCKED.save(deps.storage, &0)?;
+    let withdrawn_rewards = msg.withdrawn_staking_rewards.unwrap_or(0);
+    WITHDRAWN_STAKING_REWARDS.save(deps.storage, &withdrawn_rewards)?;
+    let withdrawn_unlocked = msg.withdrawn_unlocked.unwrap_or(0);
+    WITHDRAWN_UNLOCKED.save(deps.storage, &withdrawn_unlocked)?;
+    let withdrawn_locked = msg.withdrawn_locked.unwrap_or(0);
+    WITHDRAWN_LOCKED.save(deps.storage, &withdrawn_locked)?;
     Ok(Response::default())
 }
 
@@ -939,6 +942,9 @@ mod tests {
             },
             max_voting_period: Duration::Time(3600),
             admin_voting_threshold_percentage: 75,
+            withdrawn_staking_rewards: None,
+            withdrawn_locked: None,
+            withdrawn_unlocked: None,
         };
         instantiate(deps, mock_env(), info, instantiate_msg)
     }
@@ -963,6 +969,9 @@ mod tests {
             },
             max_voting_period: Duration::Time(3600),
             admin_voting_threshold_percentage: 75,
+            withdrawn_staking_rewards: None,
+            withdrawn_locked: None,
+            withdrawn_unlocked: None,
         };
         let err =
             instantiate(deps.as_mut(), mock_env(), info.clone(), instantiate_msg).unwrap_err();
@@ -981,6 +990,9 @@ mod tests {
             },
             max_voting_period: Duration::Time(3600),
             admin_voting_threshold_percentage: 75,
+            withdrawn_staking_rewards: None,
+            withdrawn_locked: None,
+            withdrawn_unlocked: None,
         };
         let err =
             instantiate(deps.as_mut(), mock_env(), info.clone(), instantiate_msg).unwrap_err();
@@ -999,6 +1011,9 @@ mod tests {
             },
             max_voting_period: Duration::Time(3600),
             admin_voting_threshold_percentage: 75,
+            withdrawn_staking_rewards: None,
+            withdrawn_locked: None,
+            withdrawn_unlocked: None,
         };
         let err =
             instantiate(deps.as_mut(), mock_env(), info.clone(), instantiate_msg).unwrap_err();
